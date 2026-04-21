@@ -1,0 +1,66 @@
+# Build directories
+/build/
+/build-cuda/
+/build-shared/
+/build-cuda-shared/
+/.install-cpu-test/
+/.install-gpu-test/
+/install/
+/install-gpu/
+
+# CMake generated files
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/install_manifest.txt
+/Testing/
+
+# Compiled artifacts
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# CUDA generated files
+*.cubin
+*.fatbin
+*.ptx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+ENV/
+/python/src/*.egg-info/
+/python/dist/
+/python/build/
+
+# Julia local environment files
+/julia/.CondaPkg/
+/julia/deps/
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and local run outputs
+*.log
+results/
+/HPRQP_log.txt
+/HPRQP_result.csv
+
+# Local progress tracking
+/IMPLEMENTATION_STATUS.md

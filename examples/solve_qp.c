@@ -1,0 +1,243 @@
+#include "hprqp.h"
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+#ifndef HPRQP_SOURCE_DIR
+#define HPRQP_SOURCE_DIR "."
+#endif
+
+static const char *status_name(HPRQPStatus status)
+{
+    switch (status) {
+    case HPRQP_STATUS_OK:
+        return "OK";
+    case HPRQP_STATUS_OPTIMAL:
+        return "OPTIMAL";
+    case HPRQP_STATUS_INVALID_ARGUMENT:
+        return "INVALID_ARGUMENT";
+    case HPRQP_STATUS_ALLOCATION_FAILED:
+        return "ALLOCATION_FAILED";
+    case HPRQP_STATUS_NOT_IMPLEMENTED:
+        return "NOT_IMPLEMENTED";
+    case HPRQP_STATUS_CONTINUE:
+        return "CONTINUE";
+    case HPRQP_STATUS_MAX_ITER:
+        return "MAX_ITER";
+    case HPRQP_STATUS_TIME_LIMIT:
+        return "TIME_LIMIT";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static int parse_size_arg(const char *value, size_t *out)
+{
+    char *endptr;
+    unsigned long long parsed;
+
+    if (value == NULL || out == NULL) {
+        return 0;
+    }
+
+    parsed = strtoull(value, &endptr, 10);
+    if (*value == '\0' || *endptr != '\0') {
+        return 0;
+    }
+
+    *out = (size_t)parsed;
+    return 1;
+}
+
+static int parse_int_arg(const char *value, int *out)
+{
+    char *endptr;
+    long parsed;
+
+    if (value == NULL || out == NULL) {
+        return 0;
+    }
+
+    parsed = strtol(value, &endptr, 10);
+    if (*value == '\0' || *endptr != '\0') {
+        return 0;
+    }
+
+    *out = (int)parsed;
+    return 1;
+}
+
+static int parse_double_arg(const char *value, double *out)
+{
+    char *endptr;
+    double parsed;
+
+    if (value == NULL || out == NULL) {
+        return 0;
+    }
+
+    parsed = strtod(value, &endptr);
+    if (*value == '\0' || *endptr != '\0') {
+        return 0;
+    }
+
+    *out = parsed;
+    return 1;
+}
+
+static int parse_spmv_mode_arg(const char *value, HPRQPSpmvMode *out)
+{
+    if (value == NULL || out == NULL) {
+        return 0;
+    }
+    if (strcmp(value, "auto") == 0) {
+        *out = HPRQP_SPMV_MODE_AUTO;
+        return 1;
+    }
+    if (strcmp(value, "cusparse") == 0) {
+        *out = HPRQP_SPMV_MODE_CUSPARSE;
+        return 1;
+    }
+    if (strcmp(value, "customized") == 0) {
+        *out = HPRQP_SPMV_MODE_CUSTOMIZED;
+        return 1;
+    }
+    return 0;
+}
+
+static void print_usage(const char *argv0)
+{
+    printf("usage: %s [mps_path] [--max-iter N] [--stoptol X] [--check-iter N] [--print-frequency N] [--time-limit X] [--verbose 0|1] [--use-gpu 0|1] [--device-number N] [--spmv-mode-q auto|cusparse|customized] [--spmv-mode-a auto|cusparse|customized] [--use-scaling 0|1]\n", argv0);
+}
+
+int main(int argc, char **argv)
+{
+    HPRQPModel model;
+    HPRQPParams params;
+    HPRQPResults results;
+    HPRQPStatus status;
+    const char *mps_path = HPRQP_SOURCE_DIR "/model.mps";
+    size_t i;
+    int argi = 1;
+
+    model_init(&model);
+    results_init(&results);
+    params_set_defaults(&params);
+    // params.verbose = 0;
+
+    while (argi < argc) {
+        if (strcmp(argv[argi], "--max-iter") == 0 && argi + 1 < argc) {
+            if (!parse_size_arg(argv[argi + 1], &params.max_iter)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--stoptol") == 0 && argi + 1 < argc) {
+            if (!parse_double_arg(argv[argi + 1], &params.stoptol)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--check-iter") == 0 && argi + 1 < argc) {
+            if (!parse_size_arg(argv[argi + 1], &params.check_iter)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--print-frequency") == 0 && argi + 1 < argc) {
+            if (!parse_int_arg(argv[argi + 1], &params.print_frequency)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--time-limit") == 0 && argi + 1 < argc) {
+            if (!parse_double_arg(argv[argi + 1], &params.time_limit)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--verbose") == 0 && argi + 1 < argc) {
+            if (!parse_int_arg(argv[argi + 1], &params.verbose)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--use-gpu") == 0 && argi + 1 < argc) {
+            if (!parse_int_arg(argv[argi + 1], &params.use_gpu)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--device-number") == 0 && argi + 1 < argc) {
+            if (!parse_int_arg(argv[argi + 1], &params.device_number)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--spmv-mode-q") == 0 && argi + 1 < argc) {
+            if (!parse_spmv_mode_arg(argv[argi + 1], &params.spmv_mode_q)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--spmv-mode-a") == 0 && argi + 1 < argc) {
+            if (!parse_spmv_mode_arg(argv[argi + 1], &params.spmv_mode_a)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--use-scaling") == 0 && argi + 1 < argc) {
+            if (!parse_int_arg(argv[argi + 1], &params.use_scaling)) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            argi += 2;
+        } else if (argv[argi][0] != '-') {
+            mps_path = argv[argi];
+            argi += 1;
+        } else {
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    status = build_from_mps(mps_path, &model);
+    if (status != HPRQP_STATUS_OK) {
+        fprintf(stderr, "failed to load MPS file '%s' with status %s\n", mps_path, status_name(status));
+        return 1;
+    }
+
+    status = solve(&model, &params, &results);
+    printf("model: %s\n", mps_path);
+    printf("status: %s\n", status_name(status));
+    printf("iter: %zu\n", results.iter);
+    printf("time: %.6f\n", results.time);
+    printf("objective: %.12g\n", results.primal_obj);
+    printf("residual: %.12g\n", results.residuals);
+    printf("gap: %.12g\n", results.gap);
+    printf("iter_4: %zu\n", results.iter_4);
+    printf("time_4: %.6f\n", results.time_4);
+    printf("iter_6: %zu\n", results.iter_6);
+    printf("time_6: %.6f\n", results.time_6);
+
+    // if (results.x != NULL) {
+    //     printf("x:");
+    //     for (i = 0; i < model.Q.ncol; ++i) {
+    //         printf(" %.12g", results.x[i]);
+    //     }
+    //     printf("\n");
+    // }
+
+    // if (results.y != NULL && model.A.nrow > 0) {
+    //     printf("y:");
+    //     for (i = 0; i < model.A.nrow; ++i) {
+    //         printf(" %.12g", results.y[i]);
+    //     }
+    //     printf("\n");
+    // }
+
+    results_free(&results);
+    model_free(&model);
+    return status == HPRQP_STATUS_OPTIMAL || status == HPRQP_STATUS_MAX_ITER || status == HPRQP_STATUS_TIME_LIMIT ? 0 : 1;
+}

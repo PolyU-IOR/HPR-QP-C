@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hprqp"
+version = "0.1.0"
+description = "Python ctypes wrapper for the HPRQP solver"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+cvxpy = ["cvxpy>=1.4"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
