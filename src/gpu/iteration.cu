@@ -1325,12 +1325,12 @@ HPRQPStatus gpu_workspace_select_spmv_modes(HPRQPGPUWorkspace *workspace,
         }
         selected_mode_q = q_cusparse_ms <= q_custom_ms ? HPRQP_SPMV_MODE_CUSPARSE : HPRQP_SPMV_MODE_CUSTOMIZED;
         workspace->spmv_mode_q = selected_mode_q;
-        if (params->verbose) {
-            std::printf("    Q: CUSPARSE=%.3fms, customized=%.3fms -> %s\n",
-                        q_cusparse_ms,
-                        q_custom_ms,
-                        spmv_mode_name_local(workspace->spmv_mode_q));
-        }
+        // if (params->verbose) {
+        //     std::printf("    Q: CUSPARSE=%.3fms, customized=%.3fms -> %s\n",
+        //                 q_cusparse_ms,
+        //                 q_custom_ms,
+        //                 spmv_mode_name_local(workspace->spmv_mode_q));
+        // }
     }
 
     if (benchmark_a) {
@@ -1346,12 +1346,12 @@ HPRQPStatus gpu_workspace_select_spmv_modes(HPRQPGPUWorkspace *workspace,
         }
         selected_mode_a = a_cusparse_ms <= a_custom_ms ? HPRQP_SPMV_MODE_CUSPARSE : HPRQP_SPMV_MODE_CUSTOMIZED;
         workspace->spmv_mode_a = selected_mode_a;
-        if (params->verbose) {
-            std::printf("    A: CUSPARSE=%.3fms, customized=%.3fms -> %s\n",
-                        a_cusparse_ms,
-                        a_custom_ms,
-                        spmv_mode_name_local(workspace->spmv_mode_a));
-        }
+        // if (params->verbose) {
+        //     std::printf("    A: CUSPARSE=%.3fms, customized=%.3fms -> %s\n",
+        //                 a_cusparse_ms,
+        //                 a_custom_ms,
+        //                 spmv_mode_name_local(workspace->spmv_mode_a));
+        // }
     }
 
     if (need_benchmark) {
@@ -1360,11 +1360,11 @@ HPRQPStatus gpu_workspace_select_spmv_modes(HPRQPGPUWorkspace *workspace,
         workspace->spmv_mode_a = selected_mode_a;
     }
 
-    if (params->verbose) {
-        std::printf("  Selected: spmv_mode_q=%s, spmv_mode_a=%s\n",
-                    spmv_mode_name_local(workspace->spmv_mode_q),
-                    spmv_mode_name_local(workspace->spmv_mode_a));
-    }
+    // if (params->verbose) {
+    //     std::printf("  Selected: spmv_mode_q=%s, spmv_mode_a=%s\n",
+    //                 spmv_mode_name_local(workspace->spmv_mode_q),
+    //                 spmv_mode_name_local(workspace->spmv_mode_a));
+    // }
 
     return HPRQP_STATUS_OK;
 }

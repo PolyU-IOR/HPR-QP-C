@@ -524,18 +524,12 @@ HPRQPStatus gpu_workspace_prepare_spmv(HPRQPGPUWorkspace *workspace,
         if (status != HPRQP_STATUS_OK) {
             return status;
         }
-        if (verbose) {
-            fprintf(stderr, "Preprocessed cuSPARSE SpMV structures for A and AT.\n");
-        }
     }
 
     if (model->Q.nnz > 0) {
         status = prepare_spmv_Q(&workspace->spmv_Q, &model->Q, workspace);
         if (status != HPRQP_STATUS_OK) {
             return status;
-        }
-        if (verbose) {
-            fprintf(stderr, "Preprocessed cuSPARSE SpMV structure for Q.\n");
         }
     }
 
