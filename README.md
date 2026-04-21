@@ -1,6 +1,6 @@
 # HPR-QP-C
 
-C/CUDA implementation of the HPRQP solver for MPS-based quadratic programs.
+A CUDA/C implementation of the Halpern Peaceman--Rachford (HPR) method for solving quadratic programming (QP) problems on GPUs.
 
 ## Install
 
