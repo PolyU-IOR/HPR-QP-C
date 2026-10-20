@@ -76,6 +76,8 @@ __global__ static void gpu_bound_violation_kernel(double *bound_scaled_abs,
     bound_scaled_abs[i] = fabs(violation * (b_scale / col_norm[i]));
 }
 
+#include "soc_residuals.cuh"
+
 HPRQPStatus gpu_compute_residuals_value(HPRQPGPUWorkspace *gpu_workspace,
                                         const HPRQPGPUProblem *gpu_problem,
                                         HPRQPResiduals *residuals,
@@ -94,6 +96,9 @@ HPRQPStatus gpu_compute_residuals_value(HPRQPGPUWorkspace *gpu_workspace,
     double max_scaled_atdy = 0.0;
     double max_scaled_ax = 0.0;
     double bound_violation = 0.0;
+
+    if (gpu_problem->num_var_cones || gpu_problem->num_row_cones)
+        return gpu_soc_compute_residuals(gpu_workspace, gpu_problem, residuals);
 
     memset(residuals, 0, sizeof(*residuals));
     blas_handle = (cublasHandle_t)gpu_workspace->blas_handle;

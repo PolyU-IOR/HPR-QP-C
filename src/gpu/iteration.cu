@@ -1,3 +1,4 @@
+#include "packed_spmv.cuh"
 #include "cuda_common.h"
 
 static HPRQPStatus gpu_vector_copy_device_to_device(HPRQPGPUVector *dst, const HPRQPGPUVector *src)
@@ -513,6 +514,7 @@ __global__ static void gpu_update_y_custom_full_kernel(double *dy,
                                                        const HPRQPGPUCsrIndex *row_ptr,
                                                        const HPRQPGPUCsrIndex *col_ind,
                                                        const double *values,
+                                                       HPRQPGPUELL ell,
                                                        double fact1,
                                                        double fact2,
                                                        double halpern_fact1,
@@ -524,7 +526,7 @@ __global__ static void gpu_update_y_custom_full_kernel(double *dy,
         return;
     }
 
-    double ax_i = csr_row_dot_device(row_ptr, col_ind, values, tempv, i);
+    double ax_i = ell.width ? packed_spmv_dot(ell, tempv, i) : csr_row_dot_device(row_ptr, col_ind, values, tempv, i);
     double s_raw = ax_i - fact1 * y[i];
     double s_proj = interval_project_device(s_raw, AL[i], AU[i]);
     double y_bar_i = fact2 * (s_proj - s_raw);
@@ -546,6 +548,7 @@ __global__ static void gpu_update_y_custom_partial_kernel(double *y_bar,
                                                           const HPRQPGPUCsrIndex *row_ptr,
                                                           const HPRQPGPUCsrIndex *col_ind,
                                                           const double *values,
+                                                       HPRQPGPUELL ell,
                                                           double fact1,
                                                           double fact2,
                                                           double halpern_fact1,
@@ -557,7 +560,7 @@ __global__ static void gpu_update_y_custom_partial_kernel(double *y_bar,
         return;
     }
 
-    double ax_i = csr_row_dot_device(row_ptr, col_ind, values, tempv, i);
+    double ax_i = ell.width ? packed_spmv_dot(ell, tempv, i) : csr_row_dot_device(row_ptr, col_ind, values, tempv, i);
     double s_raw = ax_i - fact1 * y[i];
     double s_proj = interval_project_device(s_raw, AL[i], AU[i]);
     double y_bar_i = fact2 * (s_proj - s_raw);
@@ -639,6 +642,7 @@ __global__ static void gpu_update_w2_custom_full_kernel(double *dw,
                                                         const HPRQPGPUCsrIndex *row_ptr,
                                                         const HPRQPGPUCsrIndex *col_ind,
                                                         const double *values,
+                                                       HPRQPGPUELL ell,
                                                         double fact_scalar,
                                                         double halpern_fact1,
                                                         double halpern_fact2,
@@ -650,7 +654,7 @@ __global__ static void gpu_update_w2_custom_full_kernel(double *dw,
         return;
     }
 
-    double aty_bar_i = csr_row_dot_device(row_ptr, col_ind, values, y_bar, i);
+    double aty_bar_i = ell.width ? packed_spmv_dot(ell, y_bar, i) : csr_row_dot_device(row_ptr, col_ind, values, y_bar, i);
     double fact = q_is_diag ? fact_vec[i] : fact_scalar;
     double w_bar_new = w_bar[i] + fact * (aty_bar_i - ATy[i]);
 
@@ -672,6 +676,7 @@ __global__ static void gpu_update_w2_custom_partial_kernel(double *w,
                                                            const HPRQPGPUCsrIndex *row_ptr,
                                                            const HPRQPGPUCsrIndex *col_ind,
                                                            const double *values,
+                                                       HPRQPGPUELL ell,
                                                            double fact_scalar,
                                                            double halpern_fact1,
                                                            double halpern_fact2,
@@ -683,7 +688,7 @@ __global__ static void gpu_update_w2_custom_partial_kernel(double *w,
         return;
     }
 
-    double aty_bar_i = csr_row_dot_device(row_ptr, col_ind, values, y_bar, i);
+    double aty_bar_i = ell.width ? packed_spmv_dot(ell, y_bar, i) : csr_row_dot_device(row_ptr, col_ind, values, y_bar, i);
     double fact = q_is_diag ? fact_vec[i] : fact_scalar;
     double w_bar_new = w_bar[i] + fact * (aty_bar_i - ATy[i]);
 
@@ -931,7 +936,7 @@ static HPRQPStatus gpu_update_y_step(HPRQPGPUWorkspace *gpu_workspace,
     fact1 = gpu_workspace->lambda_max_A * gpu_workspace->sigma;
     fact2 = 1.0 / fact1;
 
-    if (gpu_workspace->spmv_mode_a == HPRQP_SPMV_MODE_CUSTOMIZED) {
+    if (gpu_problem->ell_A.width || gpu_workspace->spmv_mode_a == HPRQP_SPMV_MODE_CUSTOMIZED) {
         if (gpu_workspace->to_check) {
             gpu_update_y_custom_full_kernel<<<blocks_m, threads_m>>>(gpu_workspace->dy.values,
                                                                      gpu_workspace->y_bar.values,
@@ -945,6 +950,7 @@ static HPRQPStatus gpu_update_y_step(HPRQPGPUWorkspace *gpu_workspace,
                                                                      gpu_problem->A.row_ptr,
                                                                      gpu_problem->A.col_ind,
                                                                      gpu_problem->A.values,
+                                                                         gpu_problem->ell_A,
                                                                      fact1,
                                                                      fact2,
                                                                      halpern_fact1,
@@ -960,6 +966,7 @@ static HPRQPStatus gpu_update_y_step(HPRQPGPUWorkspace *gpu_workspace,
                                                                         gpu_problem->A.row_ptr,
                                                                         gpu_problem->A.col_ind,
                                                                         gpu_problem->A.values,
+                                                                         gpu_problem->ell_A,
                                                                         fact1,
                                                                         fact2,
                                                                         halpern_fact1,
@@ -1044,7 +1051,7 @@ static HPRQPStatus gpu_update_w2_step(HPRQPGPUWorkspace *gpu_workspace,
         return HPRQP_STATUS_OK;
     }
 
-    if (gpu_workspace->spmv_mode_a == HPRQP_SPMV_MODE_CUSTOMIZED) {
+    if (gpu_problem->ell_A.width || gpu_workspace->spmv_mode_a == HPRQP_SPMV_MODE_CUSTOMIZED) {
         if (gpu_workspace->to_check) {
             gpu_update_w2_custom_full_kernel<<<blocks_n, threads_n>>>(gpu_workspace->dw.values,
                                                                       gpu_workspace->ATdy.values,
@@ -1059,6 +1066,7 @@ static HPRQPStatus gpu_update_w2_step(HPRQPGPUWorkspace *gpu_workspace,
                                                                       gpu_problem->AT.row_ptr,
                                                                       gpu_problem->AT.col_ind,
                                                                       gpu_problem->AT.values,
+                                                                         gpu_problem->ell_AT,
                                                                       fact_scalar,
                                                                       halpern_fact1,
                                                                       halpern_fact2,
@@ -1075,6 +1083,7 @@ static HPRQPStatus gpu_update_w2_step(HPRQPGPUWorkspace *gpu_workspace,
                                                                          gpu_problem->AT.row_ptr,
                                                                          gpu_problem->AT.col_ind,
                                                                          gpu_problem->AT.values,
+                                                                         gpu_problem->ell_AT,
                                                                          fact_scalar,
                                                                          halpern_fact1,
                                                                          halpern_fact2,
@@ -1299,6 +1308,9 @@ HPRQPStatus gpu_workspace_select_spmv_modes(HPRQPGPUWorkspace *workspace,
 
     workspace->spmv_mode_q = params->spmv_mode_q == HPRQP_SPMV_MODE_AUTO ? HPRQP_SPMV_MODE_CUSPARSE : params->spmv_mode_q;
     workspace->spmv_mode_a = params->spmv_mode_a == HPRQP_SPMV_MODE_AUTO ? HPRQP_SPMV_MODE_CUSPARSE : params->spmv_mode_a;
+    /* Existing microbenchmarks update interval-only iterates. Do not run them
+     * on cone data; the first generic cone path defaults to cuSPARSE. */
+    if (model->num_var_cones || model->num_row_cones) return HPRQP_STATUS_OK;
     selected_mode_q = workspace->spmv_mode_q;
     selected_mode_a = workspace->spmv_mode_a;
 
@@ -1369,6 +1381,8 @@ HPRQPStatus gpu_workspace_select_spmv_modes(HPRQPGPUWorkspace *workspace,
     return HPRQP_STATUS_OK;
 }
 
+#include "soc_iteration.cuh"
+
 HPRQPStatus gpu_iteration_step(HPRQPGPUWorkspace *gpu_workspace,
                                const HPRQPGPUProblem *gpu_problem,
                                size_t inner_iter)
@@ -1379,6 +1393,9 @@ HPRQPStatus gpu_iteration_step(HPRQPGPUWorkspace *gpu_workspace,
     unsigned int blocks_n;
     unsigned int threads_m;
     unsigned int blocks_m;
+
+    if (gpu_qp_metric_enabled(gpu_workspace) || gpu_problem->num_var_cones || gpu_problem->num_row_cones)
+        return gpu_soc_iteration_step(gpu_workspace, gpu_problem, inner_iter);
 
     halpern_fact1 = 1.0 / ((double)inner_iter + 2.0);
     halpern_fact2 = 1.0 - halpern_fact1;

@@ -139,7 +139,7 @@ void params_set_defaults(HPRQPParams *params)
     memset(params, 0, sizeof(*params));
     params->stoptol = 1e-8;
     params->max_iter = (size_t)INT_MAX;
-    params->use_gpu = 1;
+    params->use_gpu = HPRQP_HAVE_CUDA;
     params->device_number = 0;
     params->time_limit = 3600.0;
     params->check_iter = 100;
@@ -148,6 +148,12 @@ void params_set_defaults(HPRQPParams *params)
     params->verbose = 1;
     params->spmv_mode_q = HPRQP_SPMV_MODE_AUTO;
     params->spmv_mode_a = HPRQP_SPMV_MODE_AUTO;
+    params->gram_mode = HPRQP_GRAM_AUTO;
+    params->polishing = 1;
+    params->polish_max_attempts = 12;
+    params->polish_episode_seconds = 20.0;
+    params->polish_total_seconds = 0.0;
+    params->polish_memory_bytes = (size_t)8 * 1024 * 1024 * 1024;
 }
 
 void results_init(HPRQPResults *results)
@@ -238,8 +244,12 @@ cleanup:
 
 HPRQPStatus solve(const HPRQPModel *model, const HPRQPParams *params, HPRQPResults *results)
 {
-    if (params == NULL) {
+    if (params == NULL || model == NULL || results == NULL) {
         return HPRQP_STATUS_INVALID_ARGUMENT;
+    }
+    if (!params->use_gpu && (model->num_var_cones || model->num_row_cones)) {
+        results_init(results);
+        return HPRQP_STATUS_NOT_IMPLEMENTED;
     }
 
     if (params->use_gpu) {

@@ -1,0 +1,94 @@
+#include "test_support.h"
+#include <cuda_runtime_api.h>
+#include <stdlib.h>
+static int exact_cache(const HPRQPGPUMatrixCSR *a, const HPRQPGPUELL *e) {
+ if (!e->width) return 0;
+ int32_t *row=(int32_t*)malloc((a->nrow+1)*sizeof(int32_t));
+ double *csr=(double*)malloc(a->nnz*sizeof(double));
+ double *ell=(double*)malloc(e->stride*e->width*sizeof(double));
+ if (!row||!csr||!ell) { free(row); free(csr); free(ell); return 0; }
+ int ok=cudaMemcpy(row,a->row_ptr,(a->nrow+1)*sizeof(int32_t),cudaMemcpyDeviceToHost)==cudaSuccess && cudaMemcpy(csr,a->values,a->nnz*sizeof(double),cudaMemcpyDeviceToHost)==cudaSuccess && cudaMemcpy(ell,e->values,e->stride*e->width*sizeof(double),cudaMemcpyDeviceToHost)==cudaSuccess;
+ for(size_t i=0;ok && i<a->nrow;i++) for(unsigned k=0;k<e->width;k++) {double want=row[i]+k<row[i+1]?csr[row[i]+k]:0; if(ell[k*e->stride+i]!=want) ok=0;}
+ free(row);free(csr);free(ell);return ok;
+}
+
+
+int main(void)
+{
+    int exit_code = 0;
+    HPRQPMatrixCSR cpu_Q = {0};
+    HPRQPMatrixCSR cpu_A = {0};
+    HPRQPMatrixCSR gpu_Q = {0};
+    HPRQPMatrixCSR gpu_A = {0};
+    HPRQPModel cpu_model;
+    HPRQPModel gpu_model;
+    HPRQPScaling cpu_scaling;
+    HPRQPScaling gpu_scaling;
+    HPRQPParams params;
+    HPRQPGPUContext context;
+    HPRQPGPUProblem gpu_problem;
+    HPRQPGPUWorkspace gpu_workspace;
+    double row_norm_host[1] = {0.0};
+    double col_norm_host[2] = {0.0, 0.0};
+
+    if (!gpu_backend_available()) {
+        printf("test_gpu_packed_scaling skipped\n");
+        return 0;
+    }
+
+    model_init(&cpu_model);
+    model_init(&gpu_model);
+    scaling_init(&cpu_scaling);
+    scaling_init(&gpu_scaling);
+    gpu_context_init(&context);
+    gpu_problem_init(&gpu_problem);
+    gpu_workspace_init(&gpu_workspace);
+    params_set_defaults(&params);
+    setenv("HPRQP_PACKED_SPMV", "1", 1);
+
+    TEST_ASSERT_OK(test_build_model_case(HPRQP_TEST_CASE_SCALE, &cpu_Q, &cpu_A, &cpu_model));
+    TEST_ASSERT_OK(test_build_model_case(HPRQP_TEST_CASE_SCALE, &gpu_Q, &gpu_A, &gpu_model));
+    TEST_ASSERT_OK(scale_problem(&cpu_model, &params, &cpu_scaling));
+
+    TEST_ASSERT_OK(gpu_context_open(&context, 0));
+    TEST_ASSERT_OK(gpu_problem_upload(&gpu_problem, &gpu_model));
+    TEST_ASSERT_OK(gpu_workspace_allocate(&gpu_workspace, &gpu_problem, &params));
+    TEST_ASSERT_OK(gpu_problem_scale(&gpu_problem, &gpu_workspace, &params, &gpu_scaling));
+    TEST_ASSERT(exact_cache(&gpu_problem.A,&gpu_problem.ell_A) && exact_cache(&gpu_problem.AT,&gpu_problem.ell_AT), "scaled packed coefficients differ from CSR");
+    TEST_ASSERT_OK(gpu_vector_copy_to_host(&gpu_workspace.row_norm, row_norm_host, 1));
+    TEST_ASSERT_OK(gpu_vector_copy_to_host(&gpu_workspace.col_norm, col_norm_host, 2));
+
+    TEST_ASSERT(test_nearly_equal_rel(cpu_scaling.norm_b, gpu_scaling.norm_b, 1e-10) &&
+                test_nearly_equal_rel(cpu_scaling.norm_c, gpu_scaling.norm_c, 1e-10) &&
+                test_nearly_equal_rel(cpu_scaling.norm_b_org, gpu_scaling.norm_b_org, 1e-10) &&
+                test_nearly_equal_rel(cpu_scaling.norm_c_org, gpu_scaling.norm_c_org, 1e-10),
+                "gpu scaling norms are wrong");
+
+    TEST_ASSERT(test_nearly_equal_abs(gpu_workspace.scale_b_scale, cpu_scaling.b_scale, 1e-12) &&
+                test_nearly_equal_abs(gpu_workspace.scale_c_scale, cpu_scaling.c_scale, 1e-12) &&
+                test_nearly_equal_rel(gpu_workspace.scale_norm_b_org, cpu_scaling.norm_b_org, 1e-10) &&
+                test_nearly_equal_rel(gpu_workspace.scale_norm_c_org, cpu_scaling.norm_c_org, 1e-10),
+                "gpu scaling metadata upload is wrong");
+
+    TEST_ASSERT(test_nearly_equal_rel(row_norm_host[0], cpu_scaling.row_norm[0], 1e-10) &&
+                test_nearly_equal_rel(col_norm_host[0], cpu_scaling.col_norm[0], 1e-10) &&
+                test_nearly_equal_rel(col_norm_host[1], cpu_scaling.col_norm[1], 1e-10),
+                "gpu scaling vectors are wrong");
+
+cleanup:
+    gpu_workspace_free(&gpu_workspace);
+    gpu_problem_free(&gpu_problem);
+    gpu_context_free(&context);
+    scaling_free(&gpu_scaling);
+    scaling_free(&cpu_scaling);
+    model_free(&gpu_model);
+    model_free(&cpu_model);
+    matrix_csr_free(&gpu_A);
+    matrix_csr_free(&gpu_Q);
+    matrix_csr_free(&cpu_A);
+    matrix_csr_free(&cpu_Q);
+    if (exit_code == 0) {
+        printf("test_gpu_packed_scaling passed\n");
+    }
+    return exit_code;
+}

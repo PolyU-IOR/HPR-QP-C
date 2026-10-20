@@ -32,6 +32,7 @@ typedef struct HPRQPSolverBackendOps {
     double (*compute_m_norm)(HPRQPSolverBackendContext *context);
     HPRQPStatus (*iteration_step)(HPRQPSolverBackendContext *context,
                                   size_t inner_iter);
+    int supports_cpu_polishing;
 } HPRQPSolverBackendOps;
 
 HPRQPStatus solve_with_backend(HPRQPSolverBackendContext *context,

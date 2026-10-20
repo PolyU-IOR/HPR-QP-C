@@ -1,4 +1,6 @@
 #include "cuda_common.h"
+#include "gpu/row_metric.h"
+#include "gpu/qp_row_metric.h"
 
 __global__ static void gpu_bound_measure_kernel(double *output,
                                                 const double *al,
@@ -184,6 +186,13 @@ HPRQPStatus gpu_workspace_setup(HPRQPGPUWorkspace *workspace,
         return status;
     }
 
+    if (model->num_row_cones) {
+        double rhs_norm;
+        status = gpu_raw_norm2(handle, workspace->m, model->soc_rhs.values, &rhs_norm);
+        if (status != HPRQP_STATUS_OK) return status;
+        norm_b = fmax(norm_b, rhs_norm);
+    }
+
     if (norm_b > 1e-16 && norm_c > 1e-16 && norm_b < 1e16 && norm_c < 1e16) {
         workspace->sigma = norm_b / norm_c;
     } else {
@@ -204,6 +213,16 @@ HPRQPStatus gpu_workspace_setup(HPRQPGPUWorkspace *workspace,
         return status;
     }
 
+    if (model->num_var_cones || model->num_row_cones) {
+        workspace->noC = 0;
+        /* A constant affine cone is meaningful, even if A is identically zero. */
+        if (!workspace->empty_A && workspace->lambda_max_A <= 0.0) workspace->lambda_max_A = 1.0;
+    }
+
+    status = gpu_qp_metric_setup(workspace, model, params);
+    if (status != HPRQP_STATUS_OK) return status;
+    status = gpu_row_metric_setup(workspace, model, params);
+    if (status != HPRQP_STATUS_OK) return status;
     if (workspace->Q_is_diag && workspace->threads_n > 0U) {
         gpu_update_diag_factors_kernel<<<workspace->blocks_n, workspace->threads_n>>>(workspace->fact1.values,
                                                                                        workspace->fact2.values,
@@ -253,7 +272,11 @@ HPRQPStatus gpu_compute_m_norm_value(HPRQPGPUWorkspace *gpu_workspace,
 
         (void)gpu_vector_dot(blas_handle, &gpu_workspace->dy, &gpu_workspace->dy, &dy_sq);
 
-        m1 = gpu_workspace->sigma * gpu_workspace->lambda_max_A * dy_sq;
+        if (gpu_qp_metric_enabled(gpu_workspace) || gpu_row_metric_enabled(gpu_workspace)) {
+            HPRQPStatus st=gpu_qp_metric_enabled(gpu_workspace) ? gpu_qp_metric_quadratic(gpu_workspace,&dy_sq) : gpu_row_metric_quadratic(gpu_workspace,&dy_sq);
+            if(st!=HPRQP_STATUS_OK)return st;
+            m1=gpu_workspace->sigma*dy_sq;
+        } else m1 = gpu_workspace->sigma * gpu_workspace->lambda_max_A * dy_sq;
 
         (void)gpu_spmv_apply_at_dy(gpu_workspace, gpu_problem);
 
@@ -311,7 +334,7 @@ HPRQPStatus gpu_compute_m_norm_value(HPRQPGPUWorkspace *gpu_workspace,
 HPRQPStatus gpu_sigma_update_value(HPRQPGPUWorkspace *gpu_workspace,
                                    const HPRQPGPUProblem *gpu_problem,
                                    const HPRQPParams *params,
-                                   const HPRQPRestart *restart_info,
+                                   HPRQPRestart *restart_info,
                                    const HPRQPResiduals *residuals,
                                    double *out_sigma)
 {
@@ -375,7 +398,11 @@ HPRQPStatus gpu_sigma_update_value(HPRQPGPUWorkspace *gpu_workspace,
                                                         gpu_workspace->n);
 
         gpu_vector_dot(blas_handle, &gpu_workspace->dy, &gpu_workspace->dy, &dy_sq);
-        a = gpu_workspace->lambda_max_A * dy_sq;
+        if (gpu_qp_metric_enabled(gpu_workspace) || gpu_row_metric_enabled(gpu_workspace)) {
+            HPRQPStatus st=gpu_qp_metric_enabled(gpu_workspace) ? gpu_qp_metric_quadratic(gpu_workspace,&dy_sq) : gpu_row_metric_quadratic(gpu_workspace,&dy_sq);
+            if(st!=HPRQP_STATUS_OK)return st;
+            a=dy_sq;
+        } else a = gpu_workspace->lambda_max_A * dy_sq;
 
         gpu_vector_dot(blas_handle, &gpu_workspace->dQw, &gpu_workspace->ATdy, &dqw_atdy);
         a -= 2.0 * dqw_atdy;
@@ -395,8 +422,9 @@ HPRQPStatus gpu_sigma_update_value(HPRQPGPUWorkspace *gpu_workspace,
         }
     }
 
-    a = a > 1e-12 ? a : 1e-12;
-    b = b > 1e-12 ? b : 1e-12;
+    double floor = 1e-12;
+    a = fmax(a, floor);
+    b = fmax(b, floor);
 
     if (gpu_workspace->Q_is_diag && !gpu_workspace->empty_A) {
         double left = 1e-12;

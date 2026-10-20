@@ -31,7 +31,8 @@ typedef struct HPRQPGPUSpMVA {
     void *desc_dx;
     void *desc_tempv;
     void *desc_Ax;
-    void *buffer;
+    void *operation; /* Owns the cuSPARSE plan and scratch allocation. */
+    void *buffer;    /* Borrowed from operation; never freed separately. */
     size_t buffer_size;
     int prepared;
 } HPRQPGPUSpMVA;
@@ -44,7 +45,8 @@ typedef struct HPRQPGPUSpMVAT {
     void *desc_ATy_bar;
     void *desc_ATy;
     void *desc_ATdy;
-    void *buffer;
+    void *operation; /* Owns the cuSPARSE plan and scratch allocation. */
+    void *buffer;    /* Borrowed from operation; never freed separately. */
     size_t buffer_size;
     int prepared;
 } HPRQPGPUSpMVAT;
@@ -58,7 +60,8 @@ typedef struct HPRQPGPUSpMVQ {
     void *desc_Qw;
     void *desc_Qw_bar;
     void *desc_Qx;
-    void *buffer;
+    void *operation; /* Owns the cuSPARSE plan and scratch allocation. */
+    void *buffer;    /* Borrowed from operation; never freed separately. */
     size_t buffer_size;
     int prepared;
 } HPRQPGPUSpMVQ;
@@ -73,6 +76,13 @@ typedef struct HPRQPGPUMatrixCSR {
     int uploaded;
 } HPRQPGPUMatrixCSR;
 
+typedef struct HPRQPGPUELL {
+    size_t stride;
+    unsigned int width;
+    HPRQPGPUCsrIndex *columns;
+    double *values;
+} HPRQPGPUELL;
+
 typedef struct HPRQPGPUProblem {
     size_t m;
     size_t n;
@@ -83,15 +93,25 @@ typedef struct HPRQPGPUProblem {
     HPRQPGPUMatrixCSR Q;
     HPRQPGPUMatrixCSR A;
     HPRQPGPUMatrixCSR AT;
+    HPRQPGPUELL ell_A, ell_AT;
     HPRQPGPUVector c;
     HPRQPGPUVector AL;
     HPRQPGPUVector AU;
     HPRQPGPUVector l;
     HPRQPGPUVector u;
     int uploaded;
+    size_t num_var_cones;
+    size_t num_row_cones;
+    size_t linear_n;
+    size_t linear_m;
+    size_t *var_cone_offsets;
+    size_t *row_cone_offsets;
+    HPRQPGPUVector soc_rhs;
 } HPRQPGPUProblem;
 
 typedef struct HPRQPGPUWorkspace {
+    void *row_metric_ctx;
+    void *qp_row_metric_ctx;
     size_t m;
     size_t n;
     int empty_A;

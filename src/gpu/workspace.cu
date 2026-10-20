@@ -1,4 +1,6 @@
 #include "cuda_common.h"
+#include "gpu/row_metric.h"
+#include "gpu/qp_row_metric.h"
 #include "spmv_internal.h"
 
 __global__ static void gpu_unscale_div_output_kernel(double *output,
@@ -83,6 +85,7 @@ void gpu_workspace_init(HPRQPGPUWorkspace *workspace)
 
 void gpu_workspace_free(HPRQPGPUWorkspace *workspace)
 {
+    if (workspace) { gpu_row_metric_free(workspace); gpu_qp_metric_free(workspace); }
     if (workspace == NULL) {
         return;
     }

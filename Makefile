@@ -23,6 +23,7 @@ RESULT_DIR ?= results
 INSTALL_PREFIX ?= $(CURDIR)/install
 GPU_INSTALL_PREFIX ?= $(INSTALL_PREFIX)-gpu
 PYTHON ?= python3
+CUDSS_ROOT ?=
 CUDA_ROOT ?=
 CUDA_HOME ?=
 CUDA_PATH ?=
@@ -87,16 +88,25 @@ GPU_SM := $(if $(strip $(DETECTED_SM)),$(DETECTED_SM),90)
 endif
 CUDA_ARCH := -arch=sm_$(GPU_SM)
 
-COMMON_CPPFLAGS := -I$(CURDIR)/include -I$(CURDIR)/src/shared -I$(CURDIR)/src/gpu -I$(CURDIR)/tests -DHPRQP_SOURCE_DIR=\"$(CURDIR)\"
+COMMON_CPPFLAGS := -I"$(CURDIR)/include" -I"$(CURDIR)/src/shared" -I"$(CURDIR)/src/gpu" -I"$(CURDIR)/tests" -DHPRQP_SOURCE_DIR='"$(CURDIR)"'
 CPU_CPPFLAGS := $(COMMON_CPPFLAGS) -DHPRQP_HAVE_CUDA=0
 GPU_CPPFLAGS := $(COMMON_CPPFLAGS) -DHPRQP_HAVE_CUDA=1 $(if $(CUDA_TOOLKIT_ROOT),-I$(CUDA_TOOLKIT_ROOT)/include)
 WARNING_FLAGS := $(if $(filter 1,$(SHOW_WARNINGS)),-Wall -Wextra -Wpedantic,-w)
 COMMON_CFLAGS := -O2 -DNDEBUG $(WARNING_FLAGS) -std=c11 -fPIC
 COMMON_CXXFLAGS := -O2 -DNDEBUG $(WARNING_FLAGS) -std=c++17 -fPIC
 COMMON_NVCCFLAGS := -O2 -DNDEBUG $(if $(filter 1,$(SHOW_WARNINGS)),,-w) --std=c++17 $(CUDA_ARCH) -Xcompiler -fPIC $(if $(filter 1,$(SHOW_WARNINGS)),,-Xcompiler -w)
-CPU_LINK_LIBS := -lm
-GPU_LINK_LIBS := -lm $(if $(CUDA_LIB_DIR),-L$(CUDA_LIB_DIR)) $(if $(wildcard $(CUDA_STUB_DIR)),-L$(CUDA_STUB_DIR)) -lcudart -lcusparse -lcublas
+CPU_LINK_LIBS := -lm -ldl
+GPU_LINK_LIBS := -lm -ldl $(if $(CUDA_LIB_DIR),-L$(CUDA_LIB_DIR) -Xlinker -rpath -Xlinker $(CUDA_LIB_DIR)) $(if $(wildcard $(CUDA_STUB_DIR)),-L$(CUDA_STUB_DIR)) -lcudart -lcusparse -lcublas -lcufft -lcusolver
 GPU_RUN_ENV := LD_LIBRARY_PATH=$(CUDA_LIB_DIR)$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
+
+CUDSS_INCLUDE := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field include)
+CUDSS_LIBRARY := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field library)
+ifneq ($(strip $(CUDSS_LIBRARY)),)
+GPU_CPPFLAGS += -DHPRQP_HAVE_CUDSS=1 -I"$(CUDSS_INCLUDE)"
+GPU_LINK_LIBS += "$(CUDSS_LIBRARY)" -Xlinker -rpath -Xlinker "$(dir $(CUDSS_LIBRARY))"
+else
+GPU_CPPFLAGS += -DHPRQP_HAVE_CUDSS=0
+endif
 
 ifeq ($(V),1)
 Q :=
@@ -113,8 +123,11 @@ $(notdir $(basename $(1)))
 endef
 
 HPRQP_SHARED_SOURCES := \
+	src/shared/polish.cpp \
+	src/shared/gram_policy.cpp \
 	src/shared/binding.c \
 	src/shared/build.c \
+	src/shared/qcqp.c \
 	src/shared/mps_qp.cpp \
 	src/shared/mps_reader.cpp \
 	src/shared/solver.c \
@@ -135,6 +148,8 @@ HPRQP_GPU_STUB_SOURCES := \
 	src/gpu/solver_stub.c
 
 HPRQP_GPU_CUDA_SOURCES := \
+	src/gpu/row_metric.cu \
+	src/gpu/qp_row_metric.cu \
 	src/gpu/context.cu \
 	src/gpu/workspace.cu \
 	src/gpu/scale.cu \
@@ -146,6 +161,8 @@ HPRQP_GPU_CUDA_SOURCES := \
 	src/gpu/solver.cu
 
 CPU_TEST_SOURCES := \
+	tests/test_defaults.c \
+	tests/test_qcqp.c \
 	tests/test_sparse_helpers.c \
 	tests/test_mps_reader.c \
 	tests/test_builder_preprocess.c \
@@ -160,6 +177,11 @@ CPU_TEST_SOURCES := \
 	tests/gpu/test_gpu_dispatch.c
 
 GPU_TEST_SOURCES := \
+	tests/test_defaults.c \
+	tests/gpu/test_gpu_packed_spmv.cu \
+	tests/gpu/test_gpu_packed_scaling.c \
+	tests/gpu/test_gpu_spmv_operation.cu \
+	tests/gpu/test_gpu_soc.cu \
 	tests/gpu/test_binding_api_gpu.c \
 	tests/gpu/test_gpu_workspace.c \
 	tests/gpu/test_gpu_scale.c \
@@ -170,6 +192,7 @@ GPU_TEST_SOURCES := \
 	tests/gpu/test_gpu_solver.c
 
 GPU_EXAMPLE_SOURCES := \
+	examples/solve_socp.c \
 	examples/gpu/compare_gpu_unchecked_path.c \
 	examples/gpu/trace_restart_compare.c
 
@@ -196,7 +219,15 @@ AUTO_BUILD_TARGETS := build
 AUTO_TEST_TARGETS := test-cpu
 AUTO_INSTALL_TARGETS := install-shared
 AUTO_CLEAN_DIRS := $(BUILD_DIR) $(SHARED_BUILD_DIR)
+DEFAULT_BUILD_TARGET := build
+DEFAULT_SOLVER_DIR := $(BUILD_DIR)
+DEFAULT_RUN_ENV :=
+DEFAULT_CPU_ARG := --use-gpu 0
 ifneq ($(strip $(CUDA_NVCC)),)
+DEFAULT_BUILD_TARGET := gpu-build
+DEFAULT_SOLVER_DIR := $(GPU_BUILD_DIR)
+DEFAULT_RUN_ENV := $(GPU_RUN_ENV)
+DEFAULT_CPU_ARG :=
 AUTO_SHARED_TARGETS += gpu-build-shared
 AUTO_BUILD_TARGETS += gpu-build gpu-build-shared
 AUTO_TEST_TARGETS += gpu-test
@@ -232,7 +263,7 @@ help:
 	  '  make build-shared     Build the shared CPU library for wrappers' \
 	  '  make gpu-build        Build the CUDA solver, tests, and GPU examples only' \
 	  '  make gpu-build-shared Build the shared CUDA library for wrappers' \
-	  '  make solve            Run solve_qp on MODEL using the CPU build' \
+	  '  make solve            Run solve_qp on MODEL using CUDA when available' \
 	  '  make gpu-solve        Run solve_qp on MODEL using the GPU build' \
 	  '  make test-cpu         Run the CPU test suite only' \
 	  '  make test-shared      Run the CPU test suite after building the shared CPU library' \
@@ -240,7 +271,7 @@ help:
 	  '  make gpu-test-shared  Run the CUDA test suite after building the shared CUDA library' \
 	  '  make install-shared   Install the CPU shared library and headers' \
 	  '  make gpu-install-shared Install the CUDA shared library and headers' \
-	  '  make dataset          Run solve_qp on all .mps files in DATASET_DIR' \
+	  '  make dataset          Run solve_qp on all .mps files (CUDA when available)' \
 	  '  make dataset-gpu      Run solve_qp on all .mps files in DATASET_DIR with GPU enabled' \
 	  '  make clean-cpu        Remove the CPU build and CPU shared-build directories' \
 	  '  make gpu-clean        Remove the CUDA build and CUDA shared-build directories' \
@@ -270,6 +301,7 @@ help:
 	  '  CUDA_HOME=path         Alternative CUDA toolkit hint used by auto-detection' \
 	  '  CUDA_PATH=path         Alternative CUDA toolkit hint used by auto-detection' \
 	  '  CUDA_NVCC=path         Override the auto-detected nvcc for gpu-* targets' \
+	  '  CUDSS_ROOT=path        Optional override of automatically detected cuDSS' \
 	  '  GPU_SM=arch            Override the detected GPU compute capability (for example: GPU_SM=90)' \
 	  '  V=1                    Show raw compile and link commands' \
 	  '  SHOW_WARNINGS=1        Enable compiler warning output' \
@@ -477,6 +509,14 @@ $(GPU_BUILD_DIR)/test_binding_api_gpu: $(call map_objects,$(GPU_BUILD_DIR),tests
 	@mkdir -p $(dir $@)
 	$(Q)$(CUDA_NVCC) -o $@ $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_binding_api_gpu.c) $(GPU_LIB) $(GPU_LINK_LIBS)
 
+$(GPU_BUILD_DIR)/solve_socp: $(call map_objects,$(GPU_BUILD_DIR),examples/solve_socp.c) $(GPU_LIB) | _require-cuda
+	@mkdir -p $(dir $@)
+	$(Q)$(CUDA_NVCC) -o $@ $(call map_objects,$(GPU_BUILD_DIR),examples/solve_socp.c) $(GPU_LIB) $(GPU_LINK_LIBS)
+
+$(GPU_BUILD_DIR)/test_gpu_soc: $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_gpu_soc.cu) $(GPU_LIB) | _require-cuda
+	@mkdir -p $(dir $@)
+	$(Q)$(CUDA_NVCC) -o $@ $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_gpu_soc.cu) $(GPU_LIB) $(GPU_LINK_LIBS)
+
 $(GPU_BUILD_DIR)/test_gpu_workspace: $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_gpu_workspace.c) $(GPU_TEST_SUPPORT_LIB) $(GPU_LIB) | _require-cuda
 	@mkdir -p $(dir $@)
 	$(Q)$(CUDA_NVCC) -o $@ $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_gpu_workspace.c) $(GPU_TEST_SUPPORT_LIB) $(GPU_LIB) $(GPU_LINK_LIBS)
@@ -547,32 +587,40 @@ auto-test: _announce-auto-test $(AUTO_TEST_TARGETS)
 
 install: auto-install
 
-install-shared: build-shared
-	@mkdir -p $(INSTALL_PREFIX)/lib $(INSTALL_PREFIX)/include
-	cp $(CPU_SHARED_LIB) $(INSTALL_PREFIX)/lib/
-	cp -R include/. $(INSTALL_PREFIX)/include/
+install-shared: build-shared $(CPU_SOLVER_BINARY)
+	@mkdir -p "$(INSTALL_PREFIX)/lib" "$(INSTALL_PREFIX)/include"
+	cp $(CPU_SHARED_LIB) "$(INSTALL_PREFIX)/lib/"
+	@mkdir -p "$(INSTALL_PREFIX)/bin"
+	cp $(CPU_SOLVER_BINARY) "$(INSTALL_PREFIX)/bin/solve_qp"
+	cp -R include/. "$(INSTALL_PREFIX)/include/"
+	@mkdir -p "$(INSTALL_PREFIX)/share/hprqp/polishing"
+	tar --exclude=__pycache__ --exclude='*.pyc' -C polishing -cf - . | tar -C "$(INSTALL_PREFIX)/share/hprqp/polishing" -xf -
 
-gpu-install-shared: gpu-build-shared
-	@mkdir -p $(GPU_INSTALL_PREFIX)/lib $(GPU_INSTALL_PREFIX)/include
-	cp $(GPU_SHARED_LIB) $(GPU_INSTALL_PREFIX)/lib/
-	cp -R include/. $(GPU_INSTALL_PREFIX)/include/
+gpu-install-shared: gpu-build-shared $(GPU_SOLVER_BINARY)
+	@mkdir -p "$(GPU_INSTALL_PREFIX)/lib" "$(GPU_INSTALL_PREFIX)/include"
+	cp $(GPU_SHARED_LIB) "$(GPU_INSTALL_PREFIX)/lib/"
+	@mkdir -p "$(GPU_INSTALL_PREFIX)/bin"
+	cp $(GPU_SOLVER_BINARY) "$(GPU_INSTALL_PREFIX)/bin/solve_qp"
+	cp -R include/. "$(GPU_INSTALL_PREFIX)/include/"
+	@mkdir -p "$(GPU_INSTALL_PREFIX)/share/hprqp/polishing"
+	tar --exclude=__pycache__ --exclude='*.pyc' -C polishing -cf - . | tar -C "$(GPU_INSTALL_PREFIX)/share/hprqp/polishing" -xf -
 
 auto-install: _announce-auto-install $(AUTO_INSTALL_TARGETS)
 
 auto-clean: _announce-auto-clean
 	rm -rf $(AUTO_CLEAN_DIRS)
 
-solve: build
-	./$(CPU_SOLVER_BINARY) $(MODEL) $(ARGS)
+solve: $(DEFAULT_BUILD_TARGET)
+	env $(DEFAULT_RUN_ENV) ./$(DEFAULT_SOLVER_DIR)/solve_qp "$(MODEL)" $(DEFAULT_CPU_ARG) $(ARGS)
 
 gpu-solve: gpu-build
-	env $(GPU_RUN_ENV) ./$(GPU_SOLVER_BINARY) $(MODEL) --use-gpu 1 $(ARGS)
+	env $(GPU_RUN_ENV) ./$(GPU_SOLVER_BINARY) "$(MODEL)" --use-gpu 1 $(ARGS)
 
-dataset: build
-	$(PYTHON) scripts/run_dataset.py $(DATASET_DIR) $(RESULT_DIR) --build-dir $(BUILD_DIR) $(ARGS)
+dataset: $(DEFAULT_BUILD_TARGET)
+	env $(DEFAULT_RUN_ENV) $(PYTHON) scripts/run_dataset.py "$(DATASET_DIR)" "$(RESULT_DIR)" --build-dir $(DEFAULT_SOLVER_DIR) $(DEFAULT_CPU_ARG) $(ARGS)
 
 dataset-gpu: gpu-build
-	env $(GPU_RUN_ENV) $(PYTHON) scripts/run_dataset.py $(DATASET_DIR) $(RESULT_DIR) --build-dir $(GPU_BUILD_DIR) --use-gpu 1 $(ARGS)
+	env $(GPU_RUN_ENV) $(PYTHON) scripts/run_dataset.py "$(DATASET_DIR)" "$(RESULT_DIR)" --build-dir $(GPU_BUILD_DIR) --use-gpu 1 $(ARGS)
 
 clean: auto-clean
 
@@ -585,3 +633,70 @@ gpu-clean:
 rebuild: clean auto-build
 
 gpu-rebuild: gpu-clean gpu-build
+# Cone helpers are included in existing CUDA translation units.
+$(GPU_BUILD_DIR)/obj/src/gpu/iteration.o: src/gpu/soc_iteration.cuh src/gpu/soc_common.cuh
+$(GPU_BUILD_DIR)/obj/src/gpu/residuals.o: src/gpu/soc_residuals.cuh src/gpu/soc_common.cuh
+$(GPU_BUILD_DIR)/obj/src/gpu/scale.o: src/gpu/soc_common.cuh
+$(GPU_BUILD_DIR)/obj/tests/gpu/test_gpu_soc.o: src/gpu/soc_common.cuh
+
+$(BUILD_DIR)/test_qcqp: $(call map_objects,$(BUILD_DIR),tests/test_qcqp.c) $(CPU_LIB)
+	$(Q)$(CXX) -o $@ $(call map_objects,$(BUILD_DIR),tests/test_qcqp.c) $(CPU_LIB) $(CPU_LINK_LIBS)
+
+# Optional polishing integration driver and host ownership tests.
+$(GPU_BUILD_DIR)/polish_native_driver: $(call map_objects,$(GPU_BUILD_DIR),tests/polishing/native_driver.cpp) $(GPU_LIB) | _require-cuda
+	$(Q)$(CUDA_NVCC) -o $@ $^ $(GPU_LINK_LIBS)
+
+$(BUILD_DIR)/test_polish_progress: tests/polishing/test_progress.cpp src/shared/polish/progress.hpp
+	@mkdir -p $(dir $@)
+	$(Q)$(CXX) -std=c++17 -Isrc/shared $< -o $@
+
+.PHONY: test-polishing
+test-polishing: $(BUILD_DIR)/test_polish_progress $(BUILD_DIR)/test_polish_publication $(BUILD_DIR)/test_polish_worker_path
+	$(Q)$(BUILD_DIR)/test_polish_progress
+	$(Q)$(BUILD_DIR)/test_polish_publication
+	$(Q)$(BUILD_DIR)/test_polish_worker_path
+	$(Q)PYTHONPATH="$(CURDIR)/polishing:$(PYTHONPATH)" $(PYTHON) tests/polishing/test_checker.py
+	$(Q)PYTHONPATH="$(CURDIR)/polishing:$(PYTHONPATH)" $(PYTHON) tests/polishing/test_common.py
+
+$(BUILD_DIR)/test_polish_publication: tests/polishing/test_publication.cpp src/shared/polish/async_process.hpp src/shared/polish/cpu_publication.hpp
+	@mkdir -p $(dir $@)
+	$(Q)$(CXX) -std=c++17 -Isrc/shared $< -ldl -o $@
+
+$(GPU_BUILD_DIR)/test_gpu_spmv_operation: $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_gpu_spmv_operation.cu) | _require-cuda
+	$(Q)$(CUDA_NVCC) -o $@ $< $(GPU_LINK_LIBS)
+
+$(GPU_BUILD_DIR)/obj/src/gpu/spmv.o $(GPU_BUILD_DIR)/obj/tests/gpu/test_gpu_spmv_operation.o: src/gpu/spmv_operation.h
+
+$(GPU_BUILD_DIR)/obj/src/gpu/row_metric.o: src/gpu/spatial_gram.cuh
+
+$(GPU_BUILD_DIR)/obj/src/gpu/context.o $(GPU_BUILD_DIR)/obj/src/gpu/iteration.o $(GPU_BUILD_DIR)/obj/src/gpu/scale.o $(GPU_BUILD_DIR)/obj/tests/gpu/test_gpu_packed_spmv.o: src/gpu/packed_spmv.cuh
+
+$(GPU_BUILD_DIR)/test_gpu_packed_spmv: $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_gpu_packed_spmv.cu) $(GPU_LIB) | _require-cuda
+	$(Q)$(CUDA_NVCC) -o $@ $^ $(GPU_LINK_LIBS)
+
+$(GPU_BUILD_DIR)/test_gpu_packed_scaling: $(call map_objects,$(GPU_BUILD_DIR),tests/gpu/test_gpu_packed_scaling.c) $(GPU_TEST_SUPPORT_LIB) $(GPU_LIB) | _require-cuda
+	$(Q)$(CUDA_NVCC) -o $@ $^ $(GPU_LINK_LIBS)
+
+$(BUILD_DIR)/test_polish_worker_path: tests/polishing/test_worker_path.cpp src/shared/polish/worker_path.hpp
+	@mkdir -p $(dir $@)
+	$(Q)$(CXX) -std=c++17 -Isrc/shared $< -ldl -o $@
+
+.PHONY: test-entrypoints
+test-entrypoints: $(BUILD_DIR)/test_defaults $(BUILD_DIR)/test_polish_worker_path
+	$(Q)$(BUILD_DIR)/test_defaults
+	$(Q)$(BUILD_DIR)/test_polish_worker_path
+	$(Q)$(PYTHON) tests/test_dataset.py
+	$(Q)$(PYTHON) tests/test_cudss_discovery.py
+
+$(BUILD_DIR)/test_defaults: $(call map_objects,$(BUILD_DIR),tests/test_defaults.c) $(CPU_LIB)
+	$(Q)$(CXX) -o $@ $^ $(CPU_LINK_LIBS)
+
+$(GPU_BUILD_DIR)/test_defaults: $(call map_objects,$(GPU_BUILD_DIR),tests/test_defaults.c) $(GPU_LIB) | _require-cuda
+	$(Q)$(CUDA_NVCC) -o $@ $^ $(GPU_LINK_LIBS)
+
+# Public layout and private owner changes must invalidate existing objects too.
+# This also covers users upgrading a tree built before dependency tracking.
+HPRQP_HEADERS := $(wildcard include/*.h include/shared/*.h include/cpu/*.h include/gpu/*.h src/shared/*.h src/shared/polish/*.hpp src/gpu/*.h src/gpu/*.cuh)
+$(CPU_CORE_OBJECTS) $(GPU_CORE_OBJECTS) $(CPU_TEST_SUPPORT_OBJECT) $(GPU_TEST_SUPPORT_OBJECT) \
+$(call map_objects,$(BUILD_DIR),$(CPU_TEST_SOURCES) examples/solve_qp.c) \
+$(call map_objects,$(GPU_BUILD_DIR),$(GPU_TEST_SOURCES) $(GPU_EXAMPLE_SOURCES) examples/solve_qp.c tests/polishing/native_driver.cpp): $(HPRQP_HEADERS)

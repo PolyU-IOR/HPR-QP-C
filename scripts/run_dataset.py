@@ -6,6 +6,7 @@ import math
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from pathlib import Path
 CSV_NAME = "HPRQP_result.csv"
 LOG_NAME = "HPRQP_log.txt"
 SUMMARY_NAMES = {"SGM10", "solved"}
-SUCCESS_STATUSES = {"OK", "MAX_ITER", "TIME_LIMIT"}
+COMPLETED_STATUSES = {"OPTIMAL", "OK", "MAX_ITER", "TIME_LIMIT"}
 FIELDNAMES = [
     "name",
     "iter",
@@ -26,6 +27,11 @@ FIELDNAMES = [
     "time_4",
     "iter_6",
     "time_6",
+    "process_time",
+    "total_time",
+    "gram_active",
+    "polish_attempts",
+    "polish_accepted",
 ]
 
 
@@ -33,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run solve_qp on all .mps files in a folder.")
     parser.add_argument("data_path", help="Folder containing .mps files")
     parser.add_argument("result_path", help="Folder for CSV and log outputs")
-    parser.add_argument("--build-dir", default="build", help="Build directory containing solve_qp")
+    parser.add_argument("--build-dir", help="Build directory; default prefers build-cuda, then build")
     parser.add_argument("--solver", default="solve_qp", help="Solver executable name")
     parser.add_argument("--max-iter", type=int)
     parser.add_argument("--stoptol", type=float)
@@ -49,8 +55,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_solver(args: argparse.Namespace, root: Path | None = None) -> Path:
+    root = root or Path(__file__).resolve().parents[1]
+    if args.build_dir is not None:
+        return (Path(args.build_dir) / args.solver).resolve()
+    directories = ("build",) if args.use_gpu == 0 else ("build-cuda", "build")
+    for directory in directories:
+        candidate = root / directory / args.solver
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("No solver executable found; run make first or supply --build-dir")
+
+
 def solver_command(args: argparse.Namespace, mps_path: Path) -> list[str]:
-    command = [str(Path(args.build_dir) / args.solver), str(mps_path)]
+    command = [str(resolve_solver(args)), str(mps_path)]
     optional_args = {
         "--max-iter": args.max_iter,
         "--stoptol": args.stoptol,
@@ -145,7 +163,7 @@ def write_csv(csv_path: Path, rows: list[dict[str, str]], time_limit: float) -> 
     solved_row = {
         "name": "solved",
         "iter": "",
-        "alg_time": str(sum(1 for value in alg_times if value < time_limit)),
+        "alg_time": str(sum(row.get("status") == "OPTIMAL" for row in data_rows)),
         "res": "",
         "primal_obj": "",
         "gap": "",
@@ -155,6 +173,15 @@ def write_csv(csv_path: Path, rows: list[dict[str, str]], time_limit: float) -> 
         "iter_6": "",
         "time_6": str(sum(1 for value in time6_values if value < time_limit)),
     }
+    # Preserve native/API/process clocks separately. Never infer a missing
+    # process clock from an old CSV, and never clip a successful process time.
+    for clock in ("alg_time", "total_time", "process_time"):
+        values = [parse_float(row, clock) if row.get("status") == "OPTIMAL"
+                  else time_limit for row in data_rows]
+        sgm_row[clock] = (shifted_geomean(values) if
+                          all(v is not None and math.isfinite(v) and v >= 0 for v in values)
+                          else "")
+        solved_row[clock] = solved_row["alg_time"]
 
     with csv_path.open("w", newline="", encoding="ascii") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
@@ -168,7 +195,11 @@ def main() -> int:
     args = parse_args()
     data_path = Path(args.data_path)
     result_path = Path(args.result_path)
-    solver_path = Path(args.build_dir) / args.solver
+    try:
+        solver_path = resolve_solver(args)
+    except FileNotFoundError as error:
+        print(error, file=sys.stderr)
+        return 1
 
     if not data_path.is_dir():
         print(f"dataset folder not found: {data_path}", file=sys.stderr)
@@ -186,7 +217,7 @@ def main() -> int:
     completed = {
         row["name"]
         for row in rows
-        if row.get("name") and row.get("status", "") in SUCCESS_STATUSES
+        if row.get("name") and row.get("status", "") in COMPLETED_STATUSES
     }
     files = sorted(path for path in data_path.iterdir() if path.is_file() and path.suffix.lower() == ".mps")
 
@@ -200,7 +231,9 @@ def main() -> int:
         command_line = f"command: {' '.join(shlex.quote(part) for part in command)}\n"
         print(banner.strip())
 
+        tick = time.perf_counter()
         completed_process = subprocess.run(command, capture_output=True, text=True)
+        process_seconds = time.perf_counter() - tick
         combined_output = completed_process.stdout
         if completed_process.stderr:
             combined_output = combined_output + ("\n" if combined_output and not combined_output.endswith("\n") else "") + completed_process.stderr
@@ -219,11 +252,17 @@ def main() -> int:
             "res": parsed.get("residual", ""),
             "primal_obj": parsed.get("objective", ""),
             "gap": parsed.get("gap", ""),
-            "status": parsed.get("status", f"EXIT_{completed_process.returncode}"),
+            "status": (parsed.get("status", "MISSING_STATUS") if completed_process.returncode == 0
+                       else f"EXIT_{completed_process.returncode}"),
             "iter_4": parsed.get("iter_4", ""),
             "time_4": parsed.get("time_4", ""),
             "iter_6": parsed.get("iter_6", ""),
             "time_6": parsed.get("time_6", ""),
+            "process_time": f"{process_seconds:.12g}",
+            "total_time": parsed.get("total_time", ""),
+            "gram_active": parsed.get("gram_active", ""),
+            "polish_attempts": parsed.get("polish_attempts", ""),
+            "polish_accepted": parsed.get("polish_accepted", ""),
         }
         existing_index = row_index_by_name.get(mps_path.name)
         if existing_index is None:
@@ -232,7 +271,7 @@ def main() -> int:
         else:
             rows[existing_index] = row
 
-        if row["status"] in SUCCESS_STATUSES:
+        if row["status"] in COMPLETED_STATUSES:
             completed.add(mps_path.name)
         else:
             completed.discard(mps_path.name)

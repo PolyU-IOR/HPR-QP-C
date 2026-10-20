@@ -34,6 +34,19 @@ typedef struct HPRQPMatrixCSR {
     int owns_data;
 } HPRQPMatrixCSR;
 
+/* Standard Lorentz cones occupy contiguous suffix blocks. Offsets are zero-based,
+ * length count+1, strictly increasing, and end at n (variables) or m (rows).
+ * soc_rhs has m entries, zero on linear rows: A_soc*x - soc_rhs_soc in K.
+ * Cone variables/rows must have (-INFINITY,+INFINITY) interval bounds.
+ * The builder copies all arrays. A zero-initialized spec means an ordinary QP. */
+typedef struct HPRQPSOCSpec {
+    size_t num_var_cones;
+    const size_t *var_offsets;
+    size_t num_row_cones;
+    const size_t *row_offsets;
+    const double *rhs;
+} HPRQPSOCSpec;
+
 typedef struct HPRQPModel {
     HPRQPMatrixCSR Q;
     HPRQPMatrixCSR A;
@@ -45,6 +58,11 @@ typedef struct HPRQPModel {
     double *u;
     double obj_constant;
     int owns_data;
+    size_t num_var_cones;
+    size_t *var_cone_offsets;
+    size_t num_row_cones;
+    size_t *row_cone_offsets;
+    double *soc_rhs;
 } HPRQPModel;
 
 typedef struct HPRQPScaling {
@@ -60,6 +78,13 @@ typedef struct HPRQPScaling {
     double norm_c_org;
 } HPRQPScaling;
 
+/* Independent, cold-start row-coordinate policy; never switches mid-solve. */
+typedef enum HPRQPGramMode {
+    HPRQP_GRAM_OFF = 0,
+    HPRQP_GRAM_AUTO = 1, /* conservative detected spatial SOC family */
+    HPRQP_GRAM_REQUEST = 2 /* try every implemented eligible model; may decline */
+} HPRQPGramMode;
+
 typedef struct HPRQPParams {
     double stoptol;
     size_t max_iter;
@@ -72,6 +97,16 @@ typedef struct HPRQPParams {
     int verbose;
     HPRQPSpmvMode spmv_mode_q;
     HPRQPSpmvMode spmv_mode_a;
+    HPRQPGramMode gram_mode;
+    int polishing; /* GPU owner, isolated CPU worker; terminal candidates only */
+    const char *polish_python; /* NULL: python3 on PATH */
+    const char *polish_worker; /* NULL: installed package or source-tree worker */
+    const char *polish_directory; /* NULL: private directory under /tmp */
+    int polish_keep_files;
+    size_t polish_max_attempts; /* 0: no attempt-count limit */
+    double polish_episode_seconds; /* 0: remaining global solve budget */
+    double polish_total_seconds; /* 0: no cumulative worker budget */
+    size_t polish_memory_bytes; /* 0: no address-space limit */
 } HPRQPParams;
 
 typedef struct HPRQPWorkspace {
@@ -172,6 +207,10 @@ typedef struct HPRQPResults {
     double *y;
     double *z;
     double *w;
+    size_t polish_attempts;
+    int polish_accepted;
+    int gram_active;
+    double total_time; /* solve call including setup, CPU cleanup and output */
 } HPRQPResults;
 
 #ifdef __cplusplus

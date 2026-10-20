@@ -2,7 +2,13 @@ cmake_minimum_required(VERSION 3.16)
 
 project(hprqp_c VERSION 0.1.0 LANGUAGES C CXX)
 
-option(HPRQP_ENABLE_CUDA "Build the CUDA backend scaffold" OFF)
+include(CheckLanguage)
+check_language(CUDA)
+set(HPRQP_CUDA_DEFAULT OFF)
+if(CMAKE_CUDA_COMPILER)
+    set(HPRQP_CUDA_DEFAULT ON)
+endif()
+option(HPRQP_ENABLE_CUDA "Build the CUDA backend when available" ${HPRQP_CUDA_DEFAULT})
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -22,8 +28,11 @@ set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG" CACHE STRING "Release flags for C" FORC
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG" CACHE STRING "Release flags for C++" FORCE)
 
 set(HPRQP_SHARED_SOURCES
+    src/shared/polish.cpp
+    src/shared/gram_policy.cpp
     src/shared/binding.c
     src/shared/build.c
+    src/shared/qcqp.c
     src/shared/mps_qp.cpp
     src/shared/mps_reader.cpp
     src/shared/solver.c
@@ -100,7 +109,11 @@ if(HPRQP_ENABLE_CUDA)
             set(CMAKE_CUDA_ARCHITECTURES "${HPRQP_DETECTED_CUDA_ARCHITECTURES}" CACHE STRING "CUDA architectures for hprqp" FORCE)
             message(STATUS "Auto-detected CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
         else()
-            set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75;80;86;89;90" CACHE STRING "CUDA architectures for hprqp" FORCE)
+            if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13)
+                set(CMAKE_CUDA_ARCHITECTURES "75;80;86;89;90" CACHE STRING "CUDA architectures for hprqp" FORCE)
+            else()
+                set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75;80;86;89;90" CACHE STRING "CUDA architectures for hprqp" FORCE)
+            endif()
             message(STATUS "Using default CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
         endif()
     else()
@@ -108,6 +121,8 @@ if(HPRQP_ENABLE_CUDA)
     endif()
 
     set(HPRQP_GPU_SOURCES
+        src/gpu/row_metric.cu
+        src/gpu/qp_row_metric.cu
         src/gpu/context.cu
         src/gpu/workspace.cu
         src/gpu/scale.cu
@@ -129,6 +144,35 @@ add_library(hprqp
 )
 
 add_library(hprqp::hprqp ALIAS hprqp)
+target_compile_definitions(hprqp PRIVATE HPRQP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(hprqp PRIVATE ${CMAKE_DL_LIBS})
+if(HPRQP_ENABLE_CUDA)
+    set(CUDSS_ROOT "" CACHE PATH "Optional cuDSS installation for equality Gram")
+    get_filename_component(HPRQP_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+    get_filename_component(HPRQP_CUDA_ROOT "${HPRQP_CUDA_BIN_DIR}" DIRECTORY)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        foreach(field include library)
+            execute_process(COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/scripts/find_cudss.py
+                --cuda-root "${HPRQP_CUDA_ROOT}" --root "${CUDSS_ROOT}" --field ${field}
+                OUTPUT_VARIABLE HPRQP_CUDSS_${field} OUTPUT_STRIP_TRAILING_WHITESPACE)
+        endforeach()
+    endif()
+    find_path(CUDSS_INCLUDE_DIR cudss.h HINTS ${HPRQP_CUDSS_include} ${CUDSS_ROOT}/include)
+    if(HPRQP_CUDSS_library)
+        set(CUDSS_LIBRARY "${HPRQP_CUDSS_library}")
+    else()
+        find_library(CUDSS_LIBRARY cudss HINTS ${CUDSS_ROOT}/lib ${CUDSS_ROOT}/lib64)
+    endif()
+    if(CUDSS_INCLUDE_DIR AND CUDSS_LIBRARY)
+        target_compile_definitions(hprqp PRIVATE HPRQP_HAVE_CUDSS=1)
+        target_include_directories(hprqp PRIVATE ${CUDSS_INCLUDE_DIR})
+        target_link_libraries(hprqp PUBLIC ${CUDSS_LIBRARY} CUDA::cufft CUDA::cusolver)
+    else()
+        message(STATUS "cuDSS unavailable: Gram requests decline to ordinary HPR")
+    endif()
+endif()
 
 target_include_directories(hprqp
     PUBLIC
@@ -293,6 +337,17 @@ if(HPRQP_ENABLE_CUDA)
 
     target_link_libraries(test_gpu_iteration PRIVATE hprqp_test_support)
 
+    add_executable(solve_socp examples/solve_socp.c)
+    target_link_libraries(solve_socp PRIVATE hprqp)
+
+    add_executable(test_gpu_spmv_operation tests/gpu/test_gpu_spmv_operation.cu)
+    target_include_directories(test_gpu_spmv_operation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
+    target_link_libraries(test_gpu_spmv_operation PRIVATE CUDA::cusparse CUDA::cudart)
+
+    add_executable(test_gpu_soc tests/gpu/test_gpu_soc.cu)
+    target_include_directories(test_gpu_soc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu)
+    target_link_libraries(test_gpu_soc PRIVATE hprqp CUDA::cublas CUDA::cusparse CUDA::cudart)
+
     add_executable(test_gpu_solver
         tests/gpu/test_gpu_solver.c
     )
@@ -341,6 +396,8 @@ if(HPRQP_ENABLE_CUDA)
     add_test(NAME test_gpu_control COMMAND test_gpu_control)
     add_test(NAME test_gpu_iteration COMMAND test_gpu_iteration)
     add_test(NAME test_gpu_solver COMMAND test_gpu_solver)
+    add_test(NAME test_gpu_spmv_operation COMMAND test_gpu_spmv_operation)
+    add_test(NAME test_gpu_soc COMMAND test_gpu_soc)
 endif()
 
 configure_package_config_file(
@@ -354,6 +411,10 @@ write_basic_package_version_file(
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY SameMajorVersion
 )
+
+set_target_properties(solve_qp PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}" INSTALL_RPATH_USE_LINK_PATH TRUE)
+set_target_properties(hprqp PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
+install(TARGETS solve_qp RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(TARGETS hprqp
     EXPORT hprqpTargets
@@ -385,3 +446,39 @@ install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/hprqpConfigVersion.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hprqp
 )
+
+if(HPRQP_ENABLE_CUDA)
+endif()
+
+add_executable(test_qcqp tests/test_qcqp.c)
+target_link_libraries(test_qcqp PRIVATE hprqp)
+add_test(NAME qcqp COMMAND test_qcqp)
+
+add_executable(test_polish_progress tests/polishing/test_progress.cpp)
+target_include_directories(test_polish_progress PRIVATE src/shared)
+add_test(NAME polish_progress COMMAND test_polish_progress)
+if(HPRQP_ENABLE_CUDA)
+    add_executable(polish_native_driver tests/polishing/native_driver.cpp)
+    target_link_libraries(polish_native_driver PRIVATE hprqp)
+endif()
+install(DIRECTORY polishing/ DESTINATION ${CMAKE_INSTALL_DATADIR}/hprqp/polishing
+    PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
+install(FILES docs/equality_gram_scaling.tex DESTINATION ${CMAKE_INSTALL_DATADIR}/hprqp/docs)
+
+add_executable(test_polish_publication tests/polishing/test_publication.cpp)
+target_include_directories(test_polish_publication PRIVATE src/shared)
+target_link_libraries(test_polish_publication PRIVATE ${CMAKE_DL_LIBS})
+add_test(NAME polish_publication COMMAND test_polish_publication)
+
+add_executable(test_defaults tests/test_defaults.c)
+target_link_libraries(test_defaults PRIVATE hprqp)
+add_test(NAME defaults COMMAND test_defaults)
+add_executable(test_polish_worker_path tests/polishing/test_worker_path.cpp)
+target_include_directories(test_polish_worker_path PRIVATE src/shared)
+target_link_libraries(test_polish_worker_path PRIVATE ${CMAKE_DL_LIBS})
+add_test(NAME polish_worker_path COMMAND test_polish_worker_path)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME dataset_entrypoint COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dataset.py)
+    add_test(NAME cudss_discovery COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cudss_discovery.py)
+endif()

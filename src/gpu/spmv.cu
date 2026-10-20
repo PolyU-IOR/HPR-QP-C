@@ -1,4 +1,6 @@
+#include "spmv_operation.h"
 #include "cuda_common.h"
+#include <new>
 #include "spmv_internal.h"
 
 static __device__ __forceinline__ double csr_row_dot_device(const HPRQPGPUCsrIndex *row_ptr,
@@ -64,6 +66,10 @@ void gpu_spmv_a_free(HPRQPGPUSpMVA *spmv)
     if (spmv == NULL) {
         return;
     }
+    delete static_cast<HPRQPSpMVOperation *>(spmv->operation);
+    spmv->operation = NULL;
+    spmv->buffer = NULL;
+    spmv->buffer_size = 0;
     if (spmv->desc_x_bar != NULL) {
         cusparseDestroyDnVec((cusparseDnVecDescr_t)spmv->desc_x_bar);
     }
@@ -82,9 +88,6 @@ void gpu_spmv_a_free(HPRQPGPUSpMVA *spmv)
     if (spmv->desc_A != NULL) {
         cusparseDestroySpMat((cusparseSpMatDescr_t)spmv->desc_A);
     }
-    if (spmv->buffer != NULL) {
-        cudaFree(spmv->buffer);
-    }
     if (spmv->handle != NULL) {
         cusparseDestroy((cusparseHandle_t)spmv->handle);
     }
@@ -96,6 +99,10 @@ void gpu_spmv_at_free(HPRQPGPUSpMVAT *spmv)
     if (spmv == NULL) {
         return;
     }
+    delete static_cast<HPRQPSpMVOperation *>(spmv->operation);
+    spmv->operation = NULL;
+    spmv->buffer = NULL;
+    spmv->buffer_size = 0;
     if (spmv->desc_y_bar != NULL) {
         cusparseDestroyDnVec((cusparseDnVecDescr_t)spmv->desc_y_bar);
     }
@@ -114,9 +121,6 @@ void gpu_spmv_at_free(HPRQPGPUSpMVAT *spmv)
     if (spmv->desc_AT != NULL) {
         cusparseDestroySpMat((cusparseSpMatDescr_t)spmv->desc_AT);
     }
-    if (spmv->buffer != NULL) {
-        cudaFree(spmv->buffer);
-    }
     if (spmv->handle != NULL) {
         cusparseDestroy((cusparseHandle_t)spmv->handle);
     }
@@ -128,6 +132,10 @@ void gpu_spmv_q_free(HPRQPGPUSpMVQ *spmv)
     if (spmv == NULL) {
         return;
     }
+    delete static_cast<HPRQPSpMVOperation *>(spmv->operation);
+    spmv->operation = NULL;
+    spmv->buffer = NULL;
+    spmv->buffer_size = 0;
     if (spmv->desc_w != NULL) {
         cusparseDestroyDnVec((cusparseDnVecDescr_t)spmv->desc_w);
     }
@@ -148,9 +156,6 @@ void gpu_spmv_q_free(HPRQPGPUSpMVQ *spmv)
     }
     if (spmv->desc_Q != NULL) {
         cusparseDestroySpMat((cusparseSpMatDescr_t)spmv->desc_Q);
-    }
-    if (spmv->buffer != NULL) {
-        cudaFree(spmv->buffer);
     }
     if (spmv->handle != NULL) {
         cusparseDestroy((cusparseHandle_t)spmv->handle);
@@ -181,69 +186,24 @@ static HPRQPStatus create_vector_descriptor(cusparseDnVecDescr_t *descriptor, co
                                                    CUDA_R_64F));
 }
 
-static HPRQPStatus allocate_spmv_buffer(void **buffer, size_t *buffer_size)
-{
-    if (buffer == NULL || buffer_size == NULL) {
-        return HPRQP_STATUS_INVALID_ARGUMENT;
-    }
-    *buffer = NULL;
-    if (*buffer_size == 0) {
-        return HPRQP_STATUS_OK;
-    }
-    return map_cuda_status(cudaMalloc(buffer, *buffer_size));
-}
-
 static HPRQPStatus prepare_spmv_common(cusparseHandle_t handle,
                                        cusparseSpMatDescr_t matrix_desc,
                                        cusparseDnVecDescr_t input_desc,
                                        cusparseDnVecDescr_t output_desc,
+                                       void **operation,
                                        void **buffer,
                                        size_t *buffer_size)
 {
-    size_t local_buffer_size = 0;
-    HPRQPStatus status;
-
-    status = map_cusparse_status(cusparseSpMV_bufferSize(handle,
-                                                         CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                                         &kSpmvAlpha,
-                                                         matrix_desc,
-                                                         input_desc,
-                                                         &kSpmvBeta,
-                                                         output_desc,
-                                                         CUDA_R_64F,
-                                                         CUSPARSE_SPMV_CSR_ALG2,
-                                                         &local_buffer_size));
+    HPRQPSpMVOperation *op = new (std::nothrow) HPRQPSpMVOperation;
+    if (!op) return map_cusparse_status(CUSPARSE_STATUS_ALLOC_FAILED);
+    HPRQPStatus status = map_cusparse_status(op->prepare(handle, matrix_desc, input_desc, output_desc));
     if (status != HPRQP_STATUS_OK) {
+        delete op;
         return status;
     }
-
-    *buffer_size = local_buffer_size;
-    status = allocate_spmv_buffer(buffer, buffer_size);
-    if (status != HPRQP_STATUS_OK) {
-        return status;
-    }
-
-#if defined(CUSPARSE_VERSION) && CUSPARSE_VERSION >= 12400
-    status = map_cusparse_status(cusparseSpMV_preprocess(handle,
-                                                         CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                                         &kSpmvAlpha,
-                                                         matrix_desc,
-                                                         input_desc,
-                                                         &kSpmvBeta,
-                                                         output_desc,
-                                                         CUDA_R_64F,
-                                                         CUSPARSE_SPMV_CSR_ALG2,
-                                                         *buffer));
-    if (status != HPRQP_STATUS_OK) {
-        if (*buffer != NULL) {
-            cudaFree(*buffer);
-            *buffer = NULL;
-        }
-        *buffer_size = 0;
-        return status;
-    }
-#endif
-
+    *operation = op;
+    *buffer = op->buffer();
+    *buffer_size = op->buffer_size();
     return HPRQP_STATUS_OK;
 }
 
@@ -295,6 +255,7 @@ static HPRQPStatus prepare_spmv_A(HPRQPGPUSpMVA *spmv,
                                  (cusparseSpMatDescr_t)spmv->desc_A,
                                  (cusparseDnVecDescr_t)spmv->desc_x_bar,
                                  (cusparseDnVecDescr_t)spmv->desc_Ax,
+                                 &spmv->operation,
                                  &spmv->buffer,
                                  &spmv->buffer_size);
     if (status != HPRQP_STATUS_OK) {
@@ -354,6 +315,7 @@ static HPRQPStatus prepare_spmv_AT(HPRQPGPUSpMVAT *spmv,
                                  (cusparseSpMatDescr_t)spmv->desc_AT,
                                  (cusparseDnVecDescr_t)spmv->desc_y_bar,
                                  (cusparseDnVecDescr_t)spmv->desc_ATy_bar,
+                                 &spmv->operation,
                                  &spmv->buffer,
                                  &spmv->buffer_size);
     if (status != HPRQP_STATUS_OK) {
@@ -418,6 +380,7 @@ static HPRQPStatus prepare_spmv_Q(HPRQPGPUSpMVQ *spmv,
                                  (cusparseSpMatDescr_t)spmv->desc_Q,
                                  (cusparseDnVecDescr_t)spmv->desc_w,
                                  (cusparseDnVecDescr_t)spmv->desc_Qw,
+                                 &spmv->operation,
                                  &spmv->buffer,
                                  &spmv->buffer_size);
     if (status != HPRQP_STATUS_OK) {
@@ -433,18 +396,11 @@ static HPRQPStatus apply_spmv(cusparseHandle_t handle,
                               cusparseSpMatDescr_t matrix_desc,
                               cusparseDnVecDescr_t input_desc,
                               cusparseDnVecDescr_t output_desc,
-                              void *buffer)
+                              void *operation)
 {
-    return map_cusparse_status(cusparseSpMV(handle,
-                                            CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                            &kSpmvAlpha,
-                                            matrix_desc,
-                                            input_desc,
-                                            &kSpmvBeta,
-                                            output_desc,
-                                            CUDA_R_64F,
-                                            CUSPARSE_SPMV_CSR_ALG2,
-                                            buffer));
+    if (!operation) return map_cusparse_status(CUSPARSE_STATUS_NOT_INITIALIZED);
+    return map_cusparse_status(static_cast<HPRQPSpMVOperation *>(operation)->apply(
+        handle, matrix_desc, input_desc, output_desc));
 }
 
 static HPRQPStatus apply_spmv_dynamic(cusparseHandle_t handle,
@@ -453,7 +409,7 @@ static HPRQPStatus apply_spmv_dynamic(cusparseHandle_t handle,
                                       size_t input_length,
                                       double *output_values,
                                       size_t output_length,
-                                      void *buffer)
+                                      void *operation)
 {
     cusparseDnVecDescr_t input_desc = NULL;
     cusparseDnVecDescr_t output_desc = NULL;
@@ -469,7 +425,7 @@ static HPRQPStatus apply_spmv_dynamic(cusparseHandle_t handle,
         return status;
     }
 
-    status = apply_spmv(handle, matrix_desc, input_desc, output_desc, buffer);
+    status = apply_spmv(handle, matrix_desc, input_desc, output_desc, operation);
     cusparseDestroyDnVec(output_desc);
     cusparseDestroyDnVec(input_desc);
     return status;
@@ -533,60 +489,68 @@ HPRQPStatus gpu_workspace_prepare_spmv(HPRQPGPUWorkspace *workspace,
         }
     }
 
+    if (verbose) {
+        const char *names[] = {"A", "AT", "Q"};
+        void *operations[] = {workspace->spmv_A.operation, workspace->spmv_AT.operation,
+                              workspace->spmv_Q.operation};
+        for (int i = 0; i < 3; ++i) {
+            const HPRQPSpMVOperation *op = static_cast<HPRQPSpMVOperation *>(operations[i]);
+            if (!op) continue;
+            std::printf("cuSPARSE %s backend: %s (scratch %zu bytes)\n", names[i],
+                        op->uses_spmvop() ? "SpMVOp ALG1" : "SpMV CSR ALG2", op->buffer_size());
+            if (op->fallback_status() != CUSPARSE_STATUS_SUCCESS)
+                std::printf("cuSPARSE %s SpMVOp setup declined: %d; using legacy SpMV\n",
+                            names[i], (int)op->fallback_status());
+        }
+    }
     workspace->spmv_prepared = 1;
     return HPRQP_STATUS_OK;
 }
 
 HPRQPStatus gpu_spmv_apply_q_w(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
+    /* Zero-Q models have no descriptor; explicitly overwrite the product. */
+    if (model->Q.nnz == 0)
+        return map_cuda_status(cudaMemsetAsync(workspace->Qw.values, 0, workspace->n * sizeof(double)));
     (void)model;
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_Q.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_Q.desc_Q,
-                 (cusparseDnVecDescr_t)workspace->spmv_Q.desc_w,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_Q.desc_Qw,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_Q.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_Q.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_Q.desc_Q,
+                      (cusparseDnVecDescr_t)workspace->spmv_Q.desc_w,
+                      (cusparseDnVecDescr_t)workspace->spmv_Q.desc_Qw,
+                      workspace->spmv_Q.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_q_w_bar(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
+    /* Zero-Q models have no descriptor; explicitly overwrite the product. */
+    if (model->Q.nnz == 0)
+        return map_cuda_status(cudaMemsetAsync(workspace->Qw_bar.values, 0, workspace->n * sizeof(double)));
     (void)model;
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_Q.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_Q.desc_Q,
-                 (cusparseDnVecDescr_t)workspace->spmv_Q.desc_w_bar,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_Q.desc_Qw_bar,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_Q.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_Q.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_Q.desc_Q,
+                      (cusparseDnVecDescr_t)workspace->spmv_Q.desc_w_bar,
+                      (cusparseDnVecDescr_t)workspace->spmv_Q.desc_Qw_bar,
+                      workspace->spmv_Q.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_q_x_bar(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
+    /* Zero-Q models have no descriptor; explicitly overwrite the product. */
+    if (model->Q.nnz == 0)
+        return map_cuda_status(cudaMemsetAsync(workspace->Qx.values, 0, workspace->n * sizeof(double)));
     (void)model;
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_Q.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_Q.desc_Q,
-                 (cusparseDnVecDescr_t)workspace->spmv_Q.desc_x_bar,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_Q.desc_Qx,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_Q.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_Q.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_Q.desc_Q,
+                      (cusparseDnVecDescr_t)workspace->spmv_Q.desc_x_bar,
+                      (cusparseDnVecDescr_t)workspace->spmv_Q.desc_Qx,
+                      workspace->spmv_Q.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_q_dw(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
+    /* Zero-Q models have no descriptor; explicitly overwrite the product. */
+    if (model->Q.nnz == 0)
+        return map_cuda_status(cudaMemsetAsync(workspace->dQw.values, 0, workspace->n * sizeof(double)));
     if (workspace->spmv_mode_q == HPRQP_SPMV_MODE_CUSTOMIZED) {
         return apply_spmv_custom(workspace->dQw.values, &model->Q, workspace->dw.values);
     }
@@ -596,11 +560,14 @@ HPRQPStatus gpu_spmv_apply_q_dw(HPRQPGPUWorkspace *workspace, const HPRQPGPUProb
                               workspace->n,
                               workspace->dQw.values,
                               workspace->n,
-                              workspace->spmv_Q.buffer);
+                              workspace->spmv_Q.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_q_atdy(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
+    /* Zero-Q models have no descriptor; explicitly overwrite the product. */
+    if (model->Q.nnz == 0)
+        return map_cuda_status(cudaMemsetAsync(workspace->QATdy.values, 0, workspace->n * sizeof(double)));
     if (workspace->spmv_mode_q == HPRQP_SPMV_MODE_CUSTOMIZED) {
         return apply_spmv_custom(workspace->QATdy.values, &model->Q, workspace->ATdy.values);
     }
@@ -610,23 +577,17 @@ HPRQPStatus gpu_spmv_apply_q_atdy(HPRQPGPUWorkspace *workspace, const HPRQPGPUPr
                               workspace->n,
                               workspace->QATdy.values,
                               workspace->n,
-                              workspace->spmv_Q.buffer);
+                              workspace->spmv_Q.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_a_tempv(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
     (void)model;
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_A.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_A.desc_A,
-                 (cusparseDnVecDescr_t)workspace->spmv_A.desc_tempv,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_A.desc_Ax,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_A.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_A.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_A.desc_A,
+                      (cusparseDnVecDescr_t)workspace->spmv_A.desc_tempv,
+                      (cusparseDnVecDescr_t)workspace->spmv_A.desc_Ax,
+                      workspace->spmv_A.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_a_x_hat(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
@@ -636,23 +597,17 @@ HPRQPStatus gpu_spmv_apply_a_x_hat(HPRQPGPUWorkspace *workspace, const HPRQPGPUP
                       (cusparseSpMatDescr_t)workspace->spmv_A.desc_A,
                       (cusparseDnVecDescr_t)workspace->spmv_A.desc_x_hat,
                       (cusparseDnVecDescr_t)workspace->spmv_A.desc_Ax,
-                      workspace->spmv_A.buffer);
+                      workspace->spmv_A.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_a_x_bar(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
     (void)model;
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_A.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_A.desc_A,
-                 (cusparseDnVecDescr_t)workspace->spmv_A.desc_x_bar,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_A.desc_Ax,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_A.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_A.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_A.desc_A,
+                      (cusparseDnVecDescr_t)workspace->spmv_A.desc_x_bar,
+                      (cusparseDnVecDescr_t)workspace->spmv_A.desc_Ax,
+                      workspace->spmv_A.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_at_y(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
@@ -660,17 +615,11 @@ HPRQPStatus gpu_spmv_apply_at_y(HPRQPGPUWorkspace *workspace, const HPRQPGPUProb
     if (workspace->spmv_mode_a == HPRQP_SPMV_MODE_CUSTOMIZED) {
         return apply_spmv_custom(workspace->ATy.values, &model->AT, workspace->y.values);
     }
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_AT.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_AT.desc_AT,
-                 (cusparseDnVecDescr_t)workspace->spmv_AT.desc_y,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_AT.desc_ATy,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_AT.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_AT.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_AT.desc_AT,
+                      (cusparseDnVecDescr_t)workspace->spmv_AT.desc_y,
+                      (cusparseDnVecDescr_t)workspace->spmv_AT.desc_ATy,
+                      workspace->spmv_AT.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_at_y_bar(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
@@ -678,17 +627,11 @@ HPRQPStatus gpu_spmv_apply_at_y_bar(HPRQPGPUWorkspace *workspace, const HPRQPGPU
     if (workspace->spmv_mode_a == HPRQP_SPMV_MODE_CUSTOMIZED) {
         return apply_spmv_custom(workspace->ATy_bar.values, &model->AT, workspace->y_bar.values);
     }
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_AT.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_AT.desc_AT,
-                 (cusparseDnVecDescr_t)workspace->spmv_AT.desc_y_bar,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_AT.desc_ATy_bar,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_AT.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_AT.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_AT.desc_AT,
+                      (cusparseDnVecDescr_t)workspace->spmv_AT.desc_y_bar,
+                      (cusparseDnVecDescr_t)workspace->spmv_AT.desc_ATy_bar,
+                      workspace->spmv_AT.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_at_dy(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
@@ -702,21 +645,15 @@ HPRQPStatus gpu_spmv_apply_at_dy(HPRQPGPUWorkspace *workspace, const HPRQPGPUPro
                               workspace->m,
                               workspace->ATdy.values,
                               workspace->n,
-                              workspace->spmv_AT.buffer);
+                              workspace->spmv_AT.operation);
 }
 
 HPRQPStatus gpu_spmv_apply_at_y_bar_residual(HPRQPGPUWorkspace *workspace, const HPRQPGPUProblem *model)
 {
     (void)model;
-    cusparseSpMV((cusparseHandle_t)workspace->spmv_AT.handle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 &kSpmvAlpha,
-                 (cusparseSpMatDescr_t)workspace->spmv_AT.desc_AT,
-                 (cusparseDnVecDescr_t)workspace->spmv_AT.desc_y_bar,
-                 &kSpmvBeta,
-                 (cusparseDnVecDescr_t)workspace->spmv_AT.desc_ATdy,
-                 CUDA_R_64F,
-                 CUSPARSE_SPMV_CSR_ALG2,
-                 workspace->spmv_AT.buffer);
-    return HPRQP_STATUS_OK;
+    return apply_spmv((cusparseHandle_t)workspace->spmv_AT.handle,
+                      (cusparseSpMatDescr_t)workspace->spmv_AT.desc_AT,
+                      (cusparseDnVecDescr_t)workspace->spmv_AT.desc_y_bar,
+                      (cusparseDnVecDescr_t)workspace->spmv_AT.desc_ATdy,
+                      workspace->spmv_AT.operation);
 }

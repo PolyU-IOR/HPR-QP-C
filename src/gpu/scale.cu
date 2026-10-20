@@ -1,4 +1,6 @@
+#include "packed_spmv.cuh"
 #include "cuda_common.h"
+#include "soc_common.cuh"
 
 __global__ static void gpu_fill_vector_kernel(double *values, double scalar, size_t length)
 {
@@ -293,8 +295,8 @@ static HPRQPStatus gpu_download_scaling_to_host(HPRQPGPUWorkspace *workspace,
     }
 
     scaling_free(host_scaling);
-    host_scaling->b_scale = 1.0;
-    host_scaling->c_scale = 1.0;
+    host_scaling->b_scale = workspace->scale_b_scale;
+    host_scaling->c_scale = workspace->scale_c_scale;
     host_scaling->norm_b_org = workspace->scale_norm_b_org;
     host_scaling->norm_c_org = workspace->scale_norm_c_org;
 
@@ -318,7 +320,13 @@ static HPRQPStatus gpu_download_scaling_to_host(HPRQPGPUWorkspace *workspace,
         }
     }
 
-    return HPRQP_STATUS_OK;
+    if (gpu_problem->num_row_cones) {
+        double rhs_norm;
+        status = gpu_raw_norm2(handle, workspace->m, gpu_problem->soc_rhs.values, &rhs_norm);
+        if (status != HPRQP_STATUS_OK) return status;
+        host_scaling->norm_b = fmax(host_scaling->norm_b, rhs_norm);
+    }
+    return packed_spmv_refresh(gpu_problem);
 }
 
 HPRQPStatus gpu_problem_scale(HPRQPGPUProblem *gpu_problem,
@@ -358,6 +366,12 @@ HPRQPStatus gpu_problem_scale(HPRQPGPUProblem *gpu_problem,
     if (status != HPRQP_STATUS_OK) {
         return status;
     }
+    if (gpu_problem->num_row_cones) {
+        double rhs_max;
+        status = gpu_raw_max_abs(handle, workspace->m, gpu_problem->soc_rhs.values, &rhs_max);
+        if (status != HPRQP_STATUS_OK) return status;
+        workspace->scale_norm_b_org = fmax(workspace->scale_norm_b_org, rhs_max);
+    }
     status = gpu_raw_max_abs(handle,
                              workspace->n,
                              gpu_problem->c.values,
@@ -389,6 +403,8 @@ HPRQPStatus gpu_problem_scale(HPRQPGPUProblem *gpu_problem,
                                                                         gpu_problem->A.values,
                                                                         workspace->m);
             }
+            if (gpu_soc_scaling_blocks(gpu_problem, workspace) != HPRQP_STATUS_OK)
+                return HPRQP_STATUS_NOT_IMPLEMENTED;
             if (cudaGetLastError() != cudaSuccess || cudaDeviceSynchronize() != cudaSuccess) {
                 return HPRQP_STATUS_NOT_IMPLEMENTED;
             }
@@ -447,6 +463,9 @@ HPRQPStatus gpu_problem_scale(HPRQPGPUProblem *gpu_problem,
                 gpu_scale_vector_div_kernel<<<blocks_m, threads_m>>>(gpu_problem->AU.values,
                                                                      workspace->reduce_tmp1.values,
                                                                      workspace->m);
+                if (gpu_problem->num_row_cones)
+                    gpu_scale_vector_div_kernel<<<blocks_m, threads_m>>>(gpu_problem->soc_rhs.values,
+                        workspace->reduce_tmp1.values, workspace->m);
             }
 
             if (cudaGetLastError() != cudaSuccess || cudaDeviceSynchronize() != cudaSuccess) {
@@ -467,6 +486,8 @@ HPRQPStatus gpu_problem_scale(HPRQPGPUProblem *gpu_problem,
                                                                     gpu_problem->A.values,
                                                                     workspace->m);
         }
+        if (gpu_soc_scaling_blocks(gpu_problem, workspace) != HPRQP_STATUS_OK)
+            return HPRQP_STATUS_NOT_IMPLEMENTED;
         if (cudaGetLastError() != cudaSuccess || cudaDeviceSynchronize() != cudaSuccess) {
             return HPRQP_STATUS_NOT_IMPLEMENTED;
         }
@@ -525,6 +546,9 @@ HPRQPStatus gpu_problem_scale(HPRQPGPUProblem *gpu_problem,
             gpu_scale_vector_div_kernel<<<blocks_m, threads_m>>>(gpu_problem->AU.values,
                                                                  workspace->reduce_tmp1.values,
                                                                  workspace->m);
+            if (gpu_problem->num_row_cones)
+                gpu_scale_vector_div_kernel<<<blocks_m, threads_m>>>(gpu_problem->soc_rhs.values,
+                    workspace->reduce_tmp1.values, workspace->m);
         }
 
         if (cudaGetLastError() != cudaSuccess || cudaDeviceSynchronize() != cudaSuccess) {

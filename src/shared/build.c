@@ -37,6 +37,68 @@ static HPRQPStatus alloc_and_copy(double **dest, const double *src, size_t n)
     return HPRQP_STATUS_OK;
 }
 
+static int cone_offsets_valid(size_t count, const size_t *offsets, size_t length)
+{
+    size_t k;
+    if (count == 0) return 1;
+    if (count > length || offsets == NULL || offsets[0] >= length || offsets[count] != length) return 0;
+    for (k = 0; k < count; ++k) {
+        if (offsets[k] >= offsets[k + 1] || offsets[k + 1] > length) return 0;
+    }
+    return 1;
+}
+
+HPRQPStatus model_validate_soc(const HPRQPModel *model)
+{
+    size_t i;
+    if (model == NULL ||
+        !cone_offsets_valid(model->num_var_cones, model->var_cone_offsets, model->Q.ncol) ||
+        !cone_offsets_valid(model->num_row_cones, model->row_cone_offsets, model->A.nrow)) {
+        return HPRQP_STATUS_INVALID_ARGUMENT;
+    }
+    if (model->num_var_cones) {
+        if (model->l == NULL || model->u == NULL) return HPRQP_STATUS_INVALID_ARGUMENT;
+        for (i = model->var_cone_offsets[0]; i < model->Q.ncol; ++i) {
+            if (model->l[i] != -INFINITY || model->u[i] != INFINITY) return HPRQP_STATUS_INVALID_ARGUMENT;
+        }
+    }
+    if (model->num_row_cones) {
+        if (model->soc_rhs == NULL || model->AL == NULL || model->AU == NULL) return HPRQP_STATUS_INVALID_ARGUMENT;
+        for (i = 0; i < model->A.nrow; ++i) {
+            if (!isfinite(model->soc_rhs[i])) return HPRQP_STATUS_INVALID_ARGUMENT;
+            if (i < model->row_cone_offsets[0]) {
+                if (model->soc_rhs[i] != 0.0) return HPRQP_STATUS_INVALID_ARGUMENT;
+            } else if (model->AL[i] != -INFINITY || model->AU[i] != INFINITY) {
+                return HPRQP_STATUS_INVALID_ARGUMENT;
+            }
+        }
+    }
+    return HPRQP_STATUS_OK;
+}
+
+static HPRQPStatus copy_cones(HPRQPModel *model, const HPRQPSOCSpec *soc)
+{
+    if (soc == NULL) return HPRQP_STATUS_OK;
+    if (!cone_offsets_valid(soc->num_var_cones, soc->var_offsets, model->Q.ncol) ||
+        !cone_offsets_valid(soc->num_row_cones, soc->row_offsets, model->A.nrow) ||
+        (soc->num_row_cones && soc->rhs == NULL)) return HPRQP_STATUS_INVALID_ARGUMENT;
+    if (soc->num_var_cones) {
+        model->var_cone_offsets = (size_t *)malloc((soc->num_var_cones + 1) * sizeof(size_t));
+        if (!model->var_cone_offsets) return HPRQP_STATUS_ALLOCATION_FAILED;
+        memcpy(model->var_cone_offsets, soc->var_offsets, (soc->num_var_cones + 1) * sizeof(size_t));
+        model->num_var_cones = soc->num_var_cones;
+    }
+    if (soc->num_row_cones) {
+        model->row_cone_offsets = (size_t *)malloc((soc->num_row_cones + 1) * sizeof(size_t));
+        if (!model->row_cone_offsets) return HPRQP_STATUS_ALLOCATION_FAILED;
+        memcpy(model->row_cone_offsets, soc->row_offsets, (soc->num_row_cones + 1) * sizeof(size_t));
+        model->num_row_cones = soc->num_row_cones;
+        if (alloc_and_copy(&model->soc_rhs, soc->rhs, model->A.nrow) != HPRQP_STATUS_OK)
+            return HPRQP_STATUS_ALLOCATION_FAILED;
+    }
+    return model_validate_soc(model);
+}
+
 static int matrix_entry_compare(const void *lhs, const void *rhs)
 {
     const MatrixEntry *a = (const MatrixEntry *)lhs;
@@ -313,6 +375,9 @@ HPRQPStatus preprocess_model(HPRQPModel *model)
         }
     }
 
+    status = model_validate_soc(model);
+    if (status != HPRQP_STATUS_OK) return status;
+
     sym_q.nrow = 0;
     sym_q.ncol = 0;
     sym_q.nnz = 0;
@@ -329,6 +394,8 @@ HPRQPStatus preprocess_model(HPRQPModel *model)
     matrix_csr_free(&model->Q);
     model->Q = sym_q;
 
+    /* Preserve conic rows, including constant affine components, and all block offsets. */
+    if (model->num_var_cones || model->num_row_cones) return HPRQP_STATUS_OK;
     return delete_empty_and_free_rows(model);
 }
 
@@ -356,6 +423,9 @@ void model_free(HPRQPModel *model)
         free_if_owned(&model->AU);
         free_if_owned(&model->l);
         free_if_owned(&model->u);
+        free(model->var_cone_offsets);
+        free(model->row_cone_offsets);
+        free(model->soc_rhs);
     }
 
     model_init(model);
@@ -370,6 +440,7 @@ HPRQPStatus model_copy(HPRQPModel *dest, const HPRQPModel *src)
     }
 
     model_free(dest);
+    dest->owns_data = 1;
 
     status = matrix_csr_copy(&dest->Q, &src->Q);
     if (status != HPRQP_STATUS_OK) {
@@ -419,12 +490,18 @@ HPRQPStatus model_copy(HPRQPModel *dest, const HPRQPModel *src)
         return status;
     }
 
+    {
+        HPRQPSOCSpec soc = {src->num_var_cones, src->var_cone_offsets,
+                           src->num_row_cones, src->row_cone_offsets, src->soc_rhs};
+        status = copy_cones(dest, &soc);
+        if (status != HPRQP_STATUS_OK) { model_free(dest); return status; }
+    }
     dest->obj_constant = src->obj_constant;
     dest->owns_data = 1;
     return HPRQP_STATUS_OK;
 }
 
-HPRQPStatus build_model_from_arrays(const HPRQPMatrixCSR *Q,
+static HPRQPStatus build_model_from_arrays_impl(const HPRQPMatrixCSR *Q,
                                     const HPRQPMatrixCSR *A,
                                     const double *c,
                                     const double *AL,
@@ -432,6 +509,7 @@ HPRQPStatus build_model_from_arrays(const HPRQPMatrixCSR *Q,
                                     const double *l,
                                     const double *u,
                                     double obj_constant,
+                                    const HPRQPSOCSpec *soc,
                                     HPRQPModel *model)
 {
     HPRQPStatus status;
@@ -456,6 +534,7 @@ HPRQPStatus build_model_from_arrays(const HPRQPMatrixCSR *Q,
     }
 
     model_free(model);
+    model->owns_data = 1;
 
     status = matrix_csr_copy(&model->Q, Q);
     if (status != HPRQP_STATUS_OK) {
@@ -505,9 +584,27 @@ HPRQPStatus build_model_from_arrays(const HPRQPMatrixCSR *Q,
         return status;
     }
 
+    status = copy_cones(model, soc);
+    if (status != HPRQP_STATUS_OK) { model_free(model); return status; }
     model->obj_constant = obj_constant;
     model->owns_data = 1;
     return preprocess_model(model);
+}
+
+HPRQPStatus build_model_from_arrays(const HPRQPMatrixCSR *Q, const HPRQPMatrixCSR *A,
+                                    const double *c, const double *AL, const double *AU,
+                                    const double *l, const double *u, double obj_constant,
+                                    HPRQPModel *model)
+{
+    return build_model_from_arrays_impl(Q, A, c, AL, AU, l, u, obj_constant, NULL, model);
+}
+
+HPRQPStatus build_from_QAbc_soc(const HPRQPMatrixCSR *Q, const HPRQPMatrixCSR *A,
+                               const double *c, const double *AL, const double *AU,
+                               const double *l, const double *u, double obj_constant,
+                               const HPRQPSOCSpec *soc, HPRQPModel *model)
+{
+    return build_model_from_arrays_impl(Q, A, c, AL, AU, l, u, obj_constant, soc, model);
 }
 
 HPRQPStatus build_from_QAbc(const HPRQPMatrixCSR *Q,

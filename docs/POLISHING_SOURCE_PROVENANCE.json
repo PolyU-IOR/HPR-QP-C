@@ -1,0 +1,26 @@
+{
+  "basis_commit": "a2f2183c5279ae620ee8c416215d221929cbf06c",
+  "scope": "Common correction and independent CPU checker only; historical portfolio and Julia policy switches removed. FixedBand class moved verbatim into common_correction/band_factor.py.",
+  "files": {
+    "polishing/hpr_polish/__init__.py": "7ed56f81d02d2aca9c3e6064396a0bf3df7c6ae424e4988c4e7b2dba5cf193bb",
+    "polishing/hpr_polish/adapters.py": "02b5774eabcc3ed54548e643b3e9b34277ecbb68a63f5cdaa95717df81eaa23f",
+    "polishing/hpr_polish/common_correction/__init__.py": "ce67ea2c354a521da43625ae75ca89e4649c996187635875836069ecaeb1326b",
+    "polishing/hpr_polish/common_correction/access.py": "0b81be870ae68f2ef3f84f014ca1df049b05940b387af572053122b3b3158c88",
+    "polishing/hpr_polish/common_correction/band.py": "c9d00613f642e9110cf236b5379598f12a6a55117b853e9a2ae15622daf14247",
+    "polishing/hpr_polish/common_correction/band_factor.py": "5f0ce21a6a2a69b208e923a941ba9591da5c58e6861f0227137060bcee6a9d86",
+    "polishing/hpr_polish/common_correction/episode.py": "5f64df6bf26eadf9998643348bac819abdad2ef89fbb4a69597f9f4ae32468b5",
+    "polishing/hpr_polish/common_correction/precision_driver.py": "1eca388cc42779080472485cda6e00407cfeaa36c6c048f14a80f190e2360834",
+    "polishing/hpr_polish/core.py": "2e041dd89f68575b241f22b4901a6810b34fc7fc83a8db06d2e8366febb2e055",
+    "polishing/hpr_polish/cpu_check.py": "b63a6b14545be49e5893309980f65f64c218e3c1379b30e7463a6f5c08ad0955",
+    "polishing/hpr_polish/numerics/__init__.py": "8920bc32bed3b7ab5ea7c1b167ff2e0c6a6776c8ea56f42f31ce49567d60874b",
+    "polishing/hpr_polish/numerics/boundary.py": "7445c7677d234c66edb350c2d31b4fe973156f64f0aedd1cb7e525a51e348b35",
+    "polishing/hpr_polish/numerics/boundary_action.py": "adb596b99a89f83d1f23f2e713f2ea51dfa1b54f18f247509e78b81adab54968",
+    "polishing/hpr_polish/numerics/kkt.py": "cbb1dea6a6a3852aecbf4e746a739f0fd873fb66b30efb3fa0b10856b648dc2e",
+    "polishing/hpr_polish/numerics/native.py": "a8b6ad4aad15f3dbd8ab93278c9d16267301064b5b5d4570382e67f2a2cee5e0",
+    "polishing/hpr_polish/numerics/native_audit.py": "a351bbbbd0cb94e83a66a381a92a3109b28a5f0e5472f97fa1bf61657efca772",
+    "polishing/hpr_polish/numerics/poisson.py": "b9b63aca20fd064b9af1ebdc406f5c28561fef9c0e2c3a4a39b6150b2692d7df",
+    "polishing/hpr_polish/numerics/spatial.py": "ed6c056d1cfb67677773c73f06564ba7af58d1c997af322cc3402089f0779cfe",
+    "polishing/hpr_polish/transport.py": "7a2bfe134105f991d84b5ea725f42ff2dd00e57f39927339efdc2915057dfb61",
+    "polishing/worker.py": "e7e674983990827be89200d22f5e0a23f2b8583007beddcc7e112c667c5309d1"
+  }
+}

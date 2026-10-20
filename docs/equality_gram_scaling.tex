@@ -1,0 +1,221 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=26mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,booktabs,hyperref}
+\newtheorem{proposition}{Proposition}
+\newcommand{\R}{\mathbb R}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\ip}[2]{\left\langle#1,#2\right\rangle}
+\title{Equality Gram Scaling in HPR-QP\\Coordinate Equivalence, ADMM Interpretation, and Implementation Contract}
+\author{HPR-QP-C experimental branch}
+\date{17 October 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+Equality whitening replaces a scalar dual gradient step by an equality Gram
+solve without changing the model or the HPR splitting. The coordinate change
+must include the dual variables, the row proximal metric, and the restart and
+penalty geometry. We derive the conservative mixed-row metric used by the
+implementation, distinguish its safeguarded update from an undamped ADMM
+subproblem, and state eligibility, fallback, and independent polishing contracts.
+Algebraic correctness does not imply a runtime improvement.
+\end{abstract}
+
+\section{Model, signs, and coordinates}
+Consider the convex native problem
+\begin{equation}\label{eq:model}
+ \min_{x\in B}\;\tfrac12 x^\top Qx+c^\top x+c_0,
+ \qquad Ex=b,\qquad Cx-d\in D.
+\end{equation}
+Here $Q\succeq0$, $B$ is a box, and $D$ is a Cartesian product of interval and
+Lorentz-cone blocks. ``Native'' means the QP or lifted conic model supplied to
+the solver; it does not mean a separate original-QCQP stopping test. Rows can
+be gathered into this partition without changing their stored order. Assume
+$E\in\R^{e\times n}$ has full row rank and define
+\[
+ A=\begin{bmatrix}E\\C\end{bmatrix},\quad
+ G=EE^\top\succ0,\quad G=LL^\top,\quad
+ \beta>0,\quad\beta\ge\norm{C}_2^2.
+\]
+The implementation bounds $\norm{C}_2^2$ by
+$\norm{C}_1\norm{C}_\infty$, with a rounding margin; it uses $\beta=1$ if the
+other-row operator is zero. Sparse factorization applies $G^{-1}$ without
+forming a dense inverse or whitening matrix.
+
+Let
+\begin{equation}\label{eq:W}
+ W=\operatorname{diag}(L^{-1},\beta^{-1/2}I),\qquad
+ \widetilde A=WA,\qquad \widetilde y=W^{-\top}y.
+\end{equation}
+The equality becomes $L^{-1}Ex=L^{-1}b$. The other rows, their affine offsets,
+and finite interval endpoints are scaled by $\beta^{-1/2}$; a Lorentz cone is
+unchanged as a set by this positive scalar scaling. In particular,
+\[
+ \widetilde A^\top\widetilde y=A^\top y,\qquad
+ \ip{\widetilde y}{Wv}=\ip{y}{v}.
+\]
+Thus stationarity and the primal--dual pairing are preserved. Dense row mixing
+is confined to equalities. Applying $L^{-1}$ to arbitrary inequality or cone
+blocks would generally destroy their simple projections and is not this method.
+The objective, primal variables and primal box are unchanged.
+
+\section{Why the mixed-row metric has a factor of two}
+\begin{proposition}\label{prop:maj}
+For the assumptions above,
+\[
+ M=\operatorname{diag}(2G,2\beta I)\succeq AA^\top,
+ \qquad \norm{WA}_2^2\le2.
+\]
+\end{proposition}
+\begin{proof}
+The exact decomposition is
+\[
+ M-AA^\top=
+ \begin{bmatrix}E\\-C\end{bmatrix}
+ \begin{bmatrix}E^\top&-C^\top\end{bmatrix}
+ +\operatorname{diag}\bigl(0,2(\beta I-CC^\top)\bigr)\succeq0.
+\]
+Equivalently, the two row blocks of $WA$ each have squared operator norm at
+most one. Their squared norms add when applied to any primal vector.
+\end{proof}
+Using $\operatorname{diag}(G,\beta I)$ instead would omit control of the cross
+term $EC^\top$. Even $E=C=[1]$, $\beta=1$, gives a negative eigenvalue for
+$\operatorname{diag}(G,\beta I)-AA^\top$. With equality rows only, $M=G$
+would suffice; the implemented path retains the tested factor two for a common
+rule. It does not silently change this coefficient on equality-only models.
+
+\section{Pulled-back HPR row update}
+Use the solver's dual sign convention $Qw+c-A^\top y-z=0$.
+Let $v$ denote the primal argument presented to the row stage. In the existing
+ordinary $w$--$y$--$w$ sweep it is
+\[
+ v=\widehat x+\sigma(Qw-Q\bar w_1).
+\]
+In whitened coordinates the usual scalar-majorized row stage uses the valid
+bound $\widetilde\lambda_A=2$. Pulling that step back gives
+\begin{align}
+ Gq&=Ev-b, & \bar y_E&=y_E-\frac{q}{2\sigma},\label{eq:ystep}\\
+ \tau&=2\sigma\beta, &
+ \bar y_R&=\frac{\Pi_D(Cv-d-\tau y_R)-(Cv-d-\tau y_R)}{\tau}.
+\end{align}
+In implementation the second line uses the original row units; scaling and
+unscaling its projection gives precisely this expression. The subsequent HPR
+reflection, Halpern averaging, primal-box projection, and both objective sweeps
+keep their existing forms. A general positive-semidefinite $Q$ is compatible
+with the coordinate argument. The available conic implementation has narrower
+eligibility than the argument; see Section~\ref{sec:policy}.
+
+\subsection{Relation to a classical equality ADMM solve}
+An unproximalized equality-coordinate ADMM minimization, with the other dual
+block held fixed and residual argument $v$, has correction
+\[
+ G(\bar y_E-y_E)=-\frac{Ev-b}{\sigma}.
+\]
+Equation~\eqref{eq:ystep} uses the same Gram linear solver but half that
+correction. Equivalently it retains an equality proximal term with matrix
+$\sigma G$, in addition to the equality augmented-Lagrangian curvature
+$\sigma G$. It is therefore an ADMM-style Gram update with a conservative
+proximal safeguard, not the literal undamped equality minimization in every
+mixed-row problem. Removing the factor two requires a separately justified
+majorizer or block-update scheme. Neither change is part of this branch.
+
+\section{Transporting the algorithm, including its controllers}
+The coordinate change does not require a new HPR splitting. It does require
+consistent geometry wherever the scalar row majorizer appears. For an increment
+$\Delta y$, the whitened squared norm is
+\[
+ 2\norm{\Delta\widetilde y}^2
+ =\Delta y^\top M\Delta y
+ =2\norm{E^\top\Delta y_E}^2+2\beta\norm{\Delta y_R}^2.
+\]
+Consequently the implementation replaces each row term
+$\lambda_A\norm{\Delta y}^2$ in its restart norm and penalty objective by this
+quadratic. Cross terms through $A^\top\Delta y$ are invariant under
+\eqref{eq:W}. The objective-side majorizer remains the existing one. It would
+be inconsistent to change only the equality update while retaining Euclidean
+row geometry in those controllers.
+
+For the general-QP implementation the initial finite-bound scale is transported
+as well. If $h_R$ denotes the finite-endpoint magnitude used by the source
+initialization, its squared norm becomes
+\[
+ b^\top G^{-1}b+\norm{h_R}^2/\beta.
+\]
+The original finite-range guards and fallback initialization remain. The tested
+legacy conic path has homogeneous equalities and preserves its previously
+qualified scalar initialization. Thus coordinate equivalence of the core update
+is distinguished from the particular initialization heuristic.
+
+All stopping residuals are evaluated in the unscaled native units. A small
+residual in whitened coordinates is not substituted for native feasibility.
+The coordinate identities inherit the applicability of an HPR result under its
+own assumptions; they do not establish a new convergence theorem for arbitrary
+adaptive restart and penalty rules.
+
+\section{Eligibility and failure policy}\label{sec:policy}
+The two public controls are independent: polishing can be used without Gram,
+and Gram without polishing. Gram is selected before iteration, not toggled
+according to elapsed time or a later residual.
+\begin{itemize}
+\item \texttt{OFF}: preserve the ordinary path.
+\item \texttt{AUTO}: conservatively recognize the tested spatial row-SOC
+family from the actual matrix: homogeneous equality rows, a five-point tensor
+Laplacian state block, positive diagonal state curvature and three-dimensional
+row cones. No filename or benchmark ID is used. Detection is a performance
+heuristic, not a guarantee for every member of the family.
+\item \texttt{REQUEST}: attempt the implemented general-QP equality or legacy
+conic path. The QP path permits affine equalities, general $Q$ and interleaved
+interval rows. The conic path currently requires homogeneous equality prefixes,
+diagonal $Q$, and no variable cones. Unsupported structures decline.
+\end{itemize}
+Numerical factorization and inverse checks must pass. No diagonal regularization
+is inserted to disguise rank deficiency. Missing cuDSS, unsupported structure,
+assembly/resource limits and rejected setup decline to ordinary HPR with setup
+cost charged. A failure after the metric is active must propagate as an error;
+it cannot silently change the HPR geometry in mid-solve. The fixed $G$ factor
+is reused across penalty changes.
+
+Broad Gram activation previously regressed full-corpus coverage. Its theoretical
+eligibility is therefore not sufficient for automatic performance selection.
+The conservative spatial rule reflects the selected co5\_1/cont5 evidence;
+transfer to another matched model still requires measurement. The separate
+exact spatial Gram-access acceleration is not included in this integration.
+
+\section{Independent CPU polishing contract}
+The GPU owner exports the immutable full unscaled native model and a consistent
+copy of $(x,w,z,y)$. One isolated CPU process applies a simplified correction:
+a QP active-bound linear solve, a frozen-factor sparse/banded residual
+correction, or one structurally justified spatial correction. There is no
+general iterative SSN refresh/line-search driver and no model-started independent
+optimizer. All changes remain private to that process.
+
+Admission uses native total error or the maximum of primal/dual equation errors
+crossing successive decades, starting at $10^{-2}$ and ending at $10$ times
+the requested tolerance. Initialization is skipped. While a worker runs,
+crossings coalesce; after it finishes, a fresh eligible current HPR snapshot is
+used. Wall time limits bound resource use but do not trigger admission. The
+validated operational budgets are configurable, including disabling their
+separate limits; they are not mathematical claims of unpolishability.
+
+A separate CPU checker recomputes primal feasibility, dual stationarity/domain
+feasibility and relative objective gap from the full native model and serialized
+candidate. It uses actual interval support endpoints and requires a feasible
+SOC dual domain. Its residual normalizations and objective-gap convention match
+the native categories; additional finite-support and box checks are safeguards.
+Acceptance requires all three categories to be finite and no larger than the
+requested tolerance. A token and payload hash bind the certificate to this
+solve and candidate. Failed or partial candidates never modify GPU iterates,
+anchors, penalty or restart state. A passing candidate populates host result
+buffers and terminates the solve; the GPU receives no candidate upload.
+When HPR terminates first, its worker is cancelled and reaped.
+
+\section{Evidence and scope}
+The source provenance is recorded in \texttt{POLISHING\_SOURCE\_PROVENANCE.json}.
+The mathematical Gram identities were qualified in S705; broad performance
+regressions were measured in S704; the selective policy with simplified
+polishing was evaluated in S707 (36/42 solved, six CPU acceptances). Those are
+historical measurements across documented sessions, not timings of this newly
+packaged branch. Branch validation checks source packaging, native certificates,
+controller lifecycle, Gram coordinate identities and fallback behavior.
+New runtime claims require complete process timings including setup, worker,
+checking and cleanup costs, counting asynchronous overlap once.
+\end{document}

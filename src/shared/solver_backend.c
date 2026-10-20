@@ -12,6 +12,8 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include "polish.h"
+
 static double current_time_seconds(void)
 {
     struct timeval tv;
@@ -354,6 +356,7 @@ HPRQPStatus solve_with_backend(HPRQPSolverBackendContext *context,
     const double *result_w_bar;
     const double *result_z_bar;
     const double *result_y_bar;
+    void *polisher = NULL;
     int collect_output = 0;
     int first_4 = 1;
     int first_6 = 1;
@@ -423,6 +426,7 @@ HPRQPStatus solve_with_backend(HPRQPSolverBackendContext *context,
         print_iteration_log(0, &residual_state, context->workspace, elapsed_seconds(start_time));
     }
 
+    if (ops->supports_cpu_polishing) polisher = hprqp_polish_create(context->model, context->params);
     final_status = HPRQP_STATUS_MAX_ITER;
     restart_info.best_sigma = context->workspace->sigma;
     for (iter = 0;; ++iter) {
@@ -432,7 +436,8 @@ HPRQPStatus solve_with_backend(HPRQPSolverBackendContext *context,
         if (iter > 0) {
             print_yes = should_print_current_iter(context->params, iter, iter_elapsed, context->params->max_iter);
             if ((context->params->check_iter > 0 && iter % context->params->check_iter == 0) || print_yes) {
-                ops->compute_residuals(context, &residual_state, iter);
+                status = ops->compute_residuals(context, &residual_state, iter);
+                if (status != HPRQP_STATUS_OK) { return_status = status; goto cleanup; }
                 if (use_best_snapshot &&
                     (!best_snapshot.valid || residual_state.KKTx_and_gap_org_bar < best_snapshot.residuals.KKTx_and_gap_org_bar)) {
                     ops->copy_output_iterates(context,
@@ -459,11 +464,28 @@ HPRQPStatus solve_with_backend(HPRQPSolverBackendContext *context,
 
         final_status = check_termination_status(&residual_state, iter, iter_elapsed, context->params);
 
+        if (polisher && final_status == HPRQP_STATUS_CONTINUE && residual_state.is_updated) {
+            HPRQPResiduals polished;
+            if (hprqp_polish_poll(polisher, context, ops, &residual_state, iter, iter_elapsed,
+                    current_snapshot.x_bar, current_snapshot.w_bar, current_snapshot.z_bar,
+                    current_snapshot.y_bar, &polished)) {
+                status = collect_results(context->workspace, context->scaling, &polished, iter,
+                    elapsed_seconds(start_time), HPRQP_STATUS_OPTIMAL, current_snapshot.x_bar,
+                    current_snapshot.w_bar, current_snapshot.z_bar, current_snapshot.y_bar, results);
+                return_status = status == HPRQP_STATUS_OK ? HPRQP_STATUS_OPTIMAL : status;
+                goto cleanup;
+            }
+            iter_elapsed = elapsed_seconds(start_time);
+            final_status = check_termination_status(&residual_state, iter, iter_elapsed, context->params);
+        }
+
         restart_check(&restart_info, iter, context->params->check_iter, context->workspace->sigma);
 
-        ops->update_sigma(context, &restart_info, &residual_state);
+        status = ops->update_sigma(context, &restart_info, &residual_state);
+        if (status != HPRQP_STATUS_OK) { return_status = status; goto cleanup; }
 
-        ops->restart_apply(context, &restart_info);
+        status = ops->restart_apply(context, &restart_info);
+        if (status != HPRQP_STATUS_OK) { return_status = status; goto cleanup; }
 
         if (context->params->verbose && (print_yes || final_status != HPRQP_STATUS_CONTINUE)) {
             print_iteration_log(iter, &residual_state, context->workspace, elapsed_seconds(start_time));
@@ -475,7 +497,8 @@ HPRQPStatus solve_with_backend(HPRQPSolverBackendContext *context,
 
         context->workspace->to_check = should_check_next_iter(context->params, &restart_info, iter + 1);
 
-        ops->iteration_step(context, restart_info.inner);
+        status = ops->iteration_step(context, restart_info.inner);
+        if (status != HPRQP_STATUS_OK) { return_status = status; goto cleanup; }
 
 
         if (restart_info.restart_flag > 0 ||
@@ -483,6 +506,7 @@ HPRQPStatus solve_with_backend(HPRQPSolverBackendContext *context,
             double gap;
 
             gap = ops->compute_m_norm(context);
+            if (!isfinite(gap)) { return_status = HPRQP_STATUS_INVALID_ARGUMENT; goto cleanup; }
             restart_post_iteration(&restart_info, iter, context->params->check_iter, gap);
         }
         restart_info.inner += 1;
@@ -520,6 +544,7 @@ cleanup:
                 return_status = status;
                 snapshot_free(&current_snapshot);
                 snapshot_free(&best_snapshot);
+                hprqp_polish_destroy(polisher, results);
                 return return_status;
             }
         }
@@ -539,5 +564,6 @@ cleanup:
 
     snapshot_free(&current_snapshot);
     snapshot_free(&best_snapshot);
+    hprqp_polish_destroy(polisher, results);
     return return_status;
 }

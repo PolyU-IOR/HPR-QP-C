@@ -108,7 +108,7 @@ static int parse_spmv_mode_arg(const char *value, HPRQPSpmvMode *out)
 
 static void print_usage(const char *argv0)
 {
-    printf("usage: %s [mps_path] [--max-iter N] [--stoptol X] [--check-iter N] [--print-frequency N] [--time-limit X] [--verbose 0|1] [--use-gpu 0|1] [--device-number N] [--spmv-mode-q auto|cusparse|customized] [--spmv-mode-a auto|cusparse|customized] [--use-scaling 0|1]\n", argv0);
+    printf("usage: %s [mps_path] [--max-iter N] [--stoptol X] [--check-iter N] [--print-frequency N] [--time-limit X] [--verbose 0|1] [--use-gpu 0|1] [--device-number N] [--spmv-mode-q auto|cusparse|customized] [--spmv-mode-a auto|cusparse|customized] [--use-scaling 0|1] [--gram off|auto|request] [--polishing 0|1] [--polish-python PATH] [--polish-worker PATH]\n", argv0);
 }
 
 int main(int argc, char **argv)
@@ -193,6 +193,23 @@ int main(int argc, char **argv)
                 return 1;
             }
             argi += 2;
+        } else if (strcmp(argv[argi], "--gram") == 0 && argi + 1 < argc) {
+            const char *mode = argv[argi + 1];
+            if (strcmp(mode, "off") == 0) params.gram_mode = HPRQP_GRAM_OFF;
+            else if (strcmp(mode, "auto") == 0) params.gram_mode = HPRQP_GRAM_AUTO;
+            else if (strcmp(mode, "request") == 0) params.gram_mode = HPRQP_GRAM_REQUEST;
+            else { print_usage(argv[0]); return 1; }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--polishing") == 0 && argi + 1 < argc) {
+            if (!parse_int_arg(argv[argi + 1], &params.polishing) ||
+                (params.polishing != 0 && params.polishing != 1)) {
+                print_usage(argv[0]); return 1;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--polish-python") == 0 && argi + 1 < argc) {
+            params.polish_python = argv[argi + 1]; argi += 2;
+        } else if (strcmp(argv[argi], "--polish-worker") == 0 && argi + 1 < argc) {
+            params.polish_worker = argv[argi + 1]; argi += 2;
         } else if (argv[argi][0] != '-') {
             mps_path = argv[argi];
             argi += 1;
@@ -216,6 +233,10 @@ int main(int argc, char **argv)
     printf("objective: %.12g\n", results.primal_obj);
     printf("residual: %.12g\n", results.residuals);
     printf("gap: %.12g\n", results.gap);
+    printf("total_time: %.6f\n", results.total_time);
+    printf("gram_active: %d\n", results.gram_active);
+    printf("polish_attempts: %zu\n", results.polish_attempts);
+    printf("polish_accepted: %d\n", results.polish_accepted);
     printf("iter_4: %zu\n", results.iter_4);
     printf("time_4: %.6f\n", results.time_4);
     printf("iter_6: %zu\n", results.iter_6);

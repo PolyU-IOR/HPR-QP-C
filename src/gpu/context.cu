@@ -1,6 +1,8 @@
+#include "packed_spmv.cuh"
 #include "gpu/gpu.h"
 
 #include "cuda_common.h"
+#include "shared/build.h"
 
 int gpu_backend_available(void)
 {
@@ -230,6 +232,7 @@ void gpu_problem_init(HPRQPGPUProblem *model)
 
 void gpu_problem_free(HPRQPGPUProblem *model)
 {
+    if (model) { packed_spmv_free(&model->ell_A); packed_spmv_free(&model->ell_AT); }
     if (model == NULL) {
         return;
     }
@@ -241,6 +244,9 @@ void gpu_problem_free(HPRQPGPUProblem *model)
     gpu_vector_free(&model->AU);
     gpu_vector_free(&model->l);
     gpu_vector_free(&model->u);
+    gpu_vector_free(&model->soc_rhs);
+    cudaFree(model->var_cone_offsets);
+    cudaFree(model->row_cone_offsets);
     gpu_problem_init(model);
 }
 
@@ -251,7 +257,7 @@ HPRQPStatus gpu_problem_upload(HPRQPGPUProblem *gpu_problem, const HPRQPModel *c
     if (gpu_problem == NULL || cpu_problem == NULL) {
         return HPRQP_STATUS_INVALID_ARGUMENT;
     }
-    if (cpu_problem->Q.ncol == 0) {
+    if (model_validate_soc(cpu_problem) != HPRQP_STATUS_OK || cpu_problem->Q.ncol == 0) {
         return HPRQP_STATUS_INVALID_ARGUMENT;
     }
 
@@ -320,6 +326,34 @@ HPRQPStatus gpu_problem_upload(HPRQPGPUProblem *gpu_problem, const HPRQPModel *c
         }
     }
 
+    gpu_problem->linear_n = cpu_problem->num_var_cones ? cpu_problem->var_cone_offsets[0] : gpu_problem->n;
+    gpu_problem->linear_m = cpu_problem->num_row_cones ? cpu_problem->row_cone_offsets[0] : gpu_problem->m;
+    gpu_problem->num_var_cones = cpu_problem->num_var_cones;
+    gpu_problem->num_row_cones = cpu_problem->num_row_cones;
+    if (cpu_problem->num_var_cones) {
+        size_t bytes = (cpu_problem->num_var_cones + 1) * sizeof(size_t);
+        if (cudaMalloc((void **)&gpu_problem->var_cone_offsets, bytes) != cudaSuccess ||
+            cudaMemcpy(gpu_problem->var_cone_offsets, cpu_problem->var_cone_offsets, bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+            gpu_problem_free(gpu_problem); return HPRQP_STATUS_ALLOCATION_FAILED;
+        }
+    }
+    if (cpu_problem->num_row_cones) {
+        size_t bytes = (cpu_problem->num_row_cones + 1) * sizeof(size_t);
+        if (cudaMalloc((void **)&gpu_problem->row_cone_offsets, bytes) != cudaSuccess ||
+            cudaMemcpy(gpu_problem->row_cone_offsets, cpu_problem->row_cone_offsets, bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+            gpu_problem_free(gpu_problem); return HPRQP_STATUS_ALLOCATION_FAILED;
+        }
+        status = gpu_vector_alloc(&gpu_problem->soc_rhs, gpu_problem->m);
+        if (status == HPRQP_STATUS_OK)
+            status = gpu_vector_copy_from_host(&gpu_problem->soc_rhs, cpu_problem->soc_rhs, gpu_problem->m);
+        if (status != HPRQP_STATUS_OK) { gpu_problem_free(gpu_problem); return status; }
+    }
+
     gpu_problem->uploaded = 1;
+    // Optional iteration-only access; CSR remains authoritative for all products.
+    const char *packed = getenv("HPRQP_PACKED_SPMV");
+    if ((!packed || packed[0] != '0') && !cpu_problem->num_var_cones && !cpu_problem->num_row_cones) {
+        packed_spmv_prepare_pair(gpu_problem, cpu_problem);
+    }
     return HPRQP_STATUS_OK;
 }

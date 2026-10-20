@@ -1,10 +1,15 @@
 #include "internal/hprqp_internal.h"
+#include "gram_policy.h"
+#include "gpu/row_metric.h"
+#include "gpu/qp_row_metric.h"
+#include <chrono>
 
 #include "solver_backend.h"
 
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 typedef struct HPRQPGPUSolveContext {
@@ -35,12 +40,13 @@ static HPRQPStatus gpu_update_sigma(HPRQPSolverBackendContext *context,
         return HPRQP_STATUS_OK;
     }
 
-    gpu_sigma_update_value(gpu_context->gpu_workspace,
+    HPRQPStatus status = gpu_sigma_update_value(gpu_context->gpu_workspace,
                                     gpu_context->gpu_problem,
                                     context->params,
                                     restart_info,
                                     residuals,
                                     &sigma_value);
+    if (status != HPRQP_STATUS_OK) return status;
 
     workspace->sigma = sigma_value;
     workspace->lambda_max_A = gpu_context->gpu_workspace->lambda_max_A;
@@ -73,8 +79,9 @@ static HPRQPStatus gpu_restart_apply(HPRQPSolverBackendContext *context,
         return HPRQP_STATUS_OK;
     }
 
-    (void)gpu_restart_apply_value(gpu_context->gpu_workspace,
+    HPRQPStatus status = gpu_restart_apply_value(gpu_context->gpu_workspace,
                                   gpu_context->gpu_problem);
+    if (status != HPRQP_STATUS_OK) return status;
 
     restart_info->last_gap = restart_info->current_gap;
     restart_info->save_gap = INFINITY;
@@ -113,10 +120,13 @@ static const HPRQPSolverBackendOps GPU_BACKEND_OPS = {
     gpu_restart_apply,
     gpu_compute_m_norm,
     gpu_iteration_step_backend,
+    1,
 };
 
 HPRQPStatus solve_gpu(const HPRQPModel *model, const HPRQPParams *params, HPRQPResults *results)
 {
+    auto begin = std::chrono::steady_clock::now();
+    HPRQPParams selected_params;
     HPRQPScaling scaling;
     HPRQPWorkspace workspace;
     HPRQPGPUContext context;
@@ -131,6 +141,15 @@ HPRQPStatus solve_gpu(const HPRQPModel *model, const HPRQPParams *params, HPRQPR
         return HPRQP_STATUS_INVALID_ARGUMENT;
     }
 
+    if (params->gram_mode < HPRQP_GRAM_OFF || params->gram_mode > HPRQP_GRAM_REQUEST)
+        return HPRQP_STATUS_INVALID_ARGUMENT;
+    selected_params = *params;
+    if (params->gram_mode == HPRQP_GRAM_AUTO) {
+        int matched = hprqp_gram_auto_eligible(model);
+        selected_params.gram_mode = matched ? HPRQP_GRAM_REQUEST : HPRQP_GRAM_OFF;
+        if (params->verbose) fprintf(stderr, "GRAM_AUTO %s\n", matched ? "spatial_structure" : "declined_structure");
+    }
+    params = &selected_params;
     scaling_init(&scaling);
     workspace_init(&workspace);
     results_init(results);
@@ -201,10 +220,12 @@ HPRQPStatus solve_gpu(const HPRQPModel *model, const HPRQPParams *params, HPRQPR
     return_status = solve_with_backend(&backend_context, &GPU_BACKEND_OPS, "GPU mode", results);
 
 cleanup:
+    results->gram_active = gpu_row_metric_enabled(&gpu_workspace) || gpu_qp_metric_enabled(&gpu_workspace);
     gpu_workspace_free(&gpu_workspace);
     gpu_problem_free(&gpu_problem);
     gpu_context_free(&context);
     workspace_free(&workspace);
     scaling_free(&scaling);
+    results->total_time = std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
     return return_status;
 }

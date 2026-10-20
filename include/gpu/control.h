@@ -16,7 +16,7 @@ HPRQPStatus gpu_compute_m_norm_value(HPRQPGPUWorkspace *gpu_workspace,
 HPRQPStatus gpu_sigma_update_value(HPRQPGPUWorkspace *gpu_workspace,
                                    const HPRQPGPUProblem *gpu_problem,
                                    const HPRQPParams *params,
-                                   const HPRQPRestart *restart_info,
+                                   HPRQPRestart *restart_info,
                                    const HPRQPResiduals *residuals,
                                    double *out_sigma);
 HPRQPStatus gpu_restart_apply_value(HPRQPGPUWorkspace *gpu_workspace,
