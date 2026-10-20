@@ -10,6 +10,7 @@ if(CMAKE_CUDA_COMPILER)
 endif()
 option(HPRQP_ENABLE_CUDA "Build the CUDA backend when available" ${HPRQP_CUDA_DEFAULT})
 option(HPRQP_REQUIRE_CUDSS "Require cuDSS for the default GPU equality Gram capability" ON)
+option(HPRQP_CHECK_CUDA_DRIVER "Validate CUDA startup on this build host" ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -155,7 +156,29 @@ if(HPRQP_ENABLE_CUDA)
     set(CUDSS_ROOT "" CACHE PATH "cuDSS development installation for equality Gram")
     get_filename_component(HPRQP_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
     get_filename_component(HPRQP_CUDA_ROOT "${HPRQP_CUDA_BIN_DIR}" DIRECTORY)
-    find_package(Python3 COMPONENTS Interpreter QUIET)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(HPRQP_DRIVER_CHECK_SKIP "")
+    if(NOT HPRQP_CHECK_CUDA_DRIVER OR CMAKE_CROSSCOMPILING)
+        set(HPRQP_DRIVER_CHECK_SKIP --skip)
+    endif()
+    execute_process(COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/scripts/configure_cuda_runtime.py
+        --cuda-root "${HPRQP_CUDA_ROOT}" --nvcc "${CMAKE_CUDA_COMPILER}" --cc "${CMAKE_C_COMPILER}"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/cuda-runtime.json"
+        --cmake-output "${CMAKE_CURRENT_BINARY_DIR}/cuda-runtime.cmake"
+        ${HPRQP_DRIVER_CHECK_SKIP}
+        RESULT_VARIABLE HPRQP_DRIVER_CHECK_RESULT)
+    if(NOT HPRQP_DRIVER_CHECK_RESULT EQUAL 0)
+        message(FATAL_ERROR "CUDA startup validation failed; see cuda-runtime.json. Select a driver-compatible CUDAToolkit_ROOT/CMAKE_CUDA_COMPILER, or install a supported driver through your administrator.")
+    endif()
+    include("${CMAKE_CURRENT_BINARY_DIR}/cuda-runtime.cmake")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/configure_cuda_runtime.py")
+    if(HPRQP_CUDA_DRIVER_DIR)
+        target_link_options(hprqp PUBLIC "LINKER:-rpath,${HPRQP_CUDA_DRIVER_DIR}")
+        target_link_options(hprqp PUBLIC
+            "LINKER:--no-as-needed,${HPRQP_CUDA_DRIVER_DIR}/libcuda.so.1,--as-needed")
+    endif()
     if(Python3_Interpreter_FOUND)
         foreach(field include library)
             execute_process(COMMAND ${Python3_EXECUTABLE}

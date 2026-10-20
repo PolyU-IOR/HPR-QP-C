@@ -28,6 +28,7 @@ CUDSS_ROOT ?=
 REQUIRE_CUDSS ?= 1
 AUTO_INSTALL_CUDSS ?= 1
 AUTO_INSTALL_NATIVE_DEPS ?= 1
+CUDA_DRIVER_CHECK ?= 1
 CUDA_ROOT ?=
 CUDA_HOME ?=
 CUDA_PATH ?=
@@ -41,6 +42,12 @@ CUDA_ENV_ROOT := $(strip $(if $(CUDA_ROOT),$(CUDA_ROOT),$(if $(CUDA_HOME),$(CUDA
 CUDA_AUTO_ROOT := $(strip $(shell \
 	if [ -n "$(CUDA_ENV_ROOT)" ]; then \
 		candidate="$(CUDA_ENV_ROOT)"; \
+		if [ -x "$$candidate/bin/nvcc" ] && [ -f "$$candidate/include/cuda.h" ]; then \
+			printf '%s\n' "$$candidate"; \
+		fi; \
+	elif [ -n "$(CUDA_NVCC)" ]; then \
+		resolved=$$(readlink -f "$(CUDA_NVCC)" 2>/dev/null || printf '%s\n' "$(CUDA_NVCC)"); \
+		candidate=$$(dirname "$$(dirname "$$resolved")"); \
 		if [ -x "$$candidate/bin/nvcc" ] && [ -f "$$candidate/include/cuda.h" ]; then \
 			printf '%s\n' "$$candidate"; \
 		fi; \
@@ -101,11 +108,17 @@ COMMON_CFLAGS := -O2 -DNDEBUG $(WARNING_FLAGS) -std=c11 -fPIC
 COMMON_CXXFLAGS := -O2 -DNDEBUG $(WARNING_FLAGS) -std=c++17 -fPIC
 COMMON_NVCCFLAGS := -O2 -DNDEBUG $(if $(filter 1,$(SHOW_WARNINGS)),,-w) --std=c++17 $(CUDA_ARCH) -Xcompiler -fPIC $(if $(filter 1,$(SHOW_WARNINGS)),,-Xcompiler -w)
 CPU_LINK_LIBS := -lm -ldl
+ifeq ($(HPRQP_GPU_RUNTIME_CHECKED),1)
+include .deps/cuda-runtime.mk
+endif
 GPU_LINK_LIBS := -lm -ldl $(if $(CUDA_LIB_DIR),-L$(CUDA_LIB_DIR) -Xlinker -rpath -Xlinker $(CUDA_LIB_DIR)) $(if $(wildcard $(CUDA_STUB_DIR)),-L$(CUDA_STUB_DIR)) -lcudart -lcusparse -lcublas -lcufft -lcusolver
 # CUDA releases can share a SONAME but expose different symbols (SpMVOp).
 # On Linux, pin the selected toolkit ahead of an unrelated LD_LIBRARY_PATH.
-# Driver compatibility directories are deliberately not embedded here.
+# Embed a compatibility driver only after a fresh native startup probe passes.
 GPU_LINK_LIBS += -Xlinker --disable-new-dtags
+# Load the verified driver as a direct ELF dependency before vendor-library
+# constructors can dlopen a system driver through their own search rules.
+GPU_LINK_LIBS += $(if $(_HPRQP_DRIVER_LIBDIR),-Xlinker -rpath -Xlinker "$(_HPRQP_DRIVER_LIBDIR)" -Xlinker --no-as-needed -Xlinker "$(_HPRQP_DRIVER_LIBDIR)/libcuda.so.1" -Xlinker --as-needed)
 GPU_RUN_ENV := LD_LIBRARY_PATH=$(CUDA_LIB_DIR)$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
 
 CUDSS_INCLUDE := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field include)
@@ -256,8 +269,18 @@ CUDSS_AUTO_GOALS := all auto-build auto-shared auto-test auto-install gpu gpu-bu
 CUDSS_REQUESTED_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
 CUDSS_GPU_REQUESTED := $(filter $(CUDSS_AUTO_GOALS) $(GPU_BUILD_DIR)/% $(GPU_SHARED_BUILD_DIR)/%,$(CUDSS_REQUESTED_GOALS))
 CUDSS_BOOTSTRAP := $(if $(and $(CUDA_NVCC),$(CUDSS_GPU_REQUESTED),$(filter 1,$(REQUIRE_CUDSS)),$(filter 1,$(AUTO_INSTALL_CUDSS))),$(if $(strip $(CUDSS_ROOT)$(CUDSS_LIBRARY)$(HPRQP_CUDSS_BOOTSTRAPPED)),,yes))
+GPU_RUNTIME_BOOTSTRAP := $(if $(and $(CUDA_NVCC),$(CUDSS_GPU_REQUESTED)),$(if $(HPRQP_GPU_RUNTIME_CHECKED),,yes))
 
-ifeq ($(CUDSS_BOOTSTRAP),yes)
+ifeq ($(GPU_RUNTIME_BOOTSTRAP),yes)
+.PHONY: _bootstrap-gpu-runtime $(CUDSS_REQUESTED_GOALS)
+$(CUDSS_REQUESTED_GOALS): _bootstrap-gpu-runtime
+_bootstrap-gpu-runtime:
+	$(Q)$(PYTHON) scripts/configure_cuda_runtime.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" \
+		--nvcc "$(CUDA_NVCC)" --cc "$(CC)" \
+		--output .deps/cuda-runtime.json --make-output .deps/cuda-runtime.mk \
+		$(if $(filter 0,$(CUDA_DRIVER_CHECK)),--skip)
+	+$(Q)$(MAKE) HPRQP_GPU_RUNTIME_CHECKED=1 $(CUDSS_REQUESTED_GOALS)
+else ifeq ($(CUDSS_BOOTSTRAP),yes)
 .PHONY: _bootstrap-cudss $(CUDSS_REQUESTED_GOALS)
 $(CUDSS_REQUESTED_GOALS): _bootstrap-cudss
 _bootstrap-cudss:
@@ -462,7 +485,7 @@ $(GPU_BUILD_DIR)/gpu-config.json: _gpu-config-force | _require-cudss
 	$(Q)$(PYTHON) scripts/write_gpu_config.py --output "$@" \
 		--cuda "$(CUDA_TOOLKIT_ROOT)" --nvcc "$(CUDA_NVCC)" --arch "$(GPU_SM)" \
 		--cudss_include "$(CUDSS_INCLUDE)" --cudss_library "$(CUDSS_LIBRARY)" \
-		--link_policy toolkit-rpath-v1
+		--link_policy toolkit-driver-rpath-v3 --driver_dir "$(_HPRQP_DRIVER_LIBDIR)"
 
 $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -775,6 +798,7 @@ test-entrypoints: $(BUILD_DIR)/test_defaults $(BUILD_DIR)/test_polish_worker_pat
 	$(Q)$(PYTHON) tests/test_native_setup.py
 	$(Q)$(PYTHON) tests/test_download_utils.py
 	$(Q)$(PYTHON) tests/test_gpu_runtime_link.py
+	$(Q)$(PYTHON) tests/test_cuda_runtime_config.py
 
 $(BUILD_DIR)/test_defaults: $(call map_objects,$(BUILD_DIR),tests/test_defaults.c) $(CPU_LIB)
 	$(Q)$(CXX) -o $@ $^ $(CPU_LINK_LIBS)

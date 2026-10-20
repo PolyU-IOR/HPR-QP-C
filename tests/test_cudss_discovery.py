@@ -15,8 +15,9 @@ class Discovery(unittest.TestCase):
             p=Path(tmp);(p/'scripts').mkdir();(p/'cuda/bin').mkdir(parents=True)
             (p/'cuda/include').mkdir();(p/'cuda/include/cuda.h').touch()
             shutil.copy2(source/'Makefile',p/'Makefile')
-            for name in ('find_cudss.py','write_gpu_config.py'):
+            for name in ('find_cudss.py','write_gpu_config.py','configure_cuda_runtime.py'):
                 shutil.copy2(source/'scripts'/name,p/'scripts'/name)
+            (p/'cuda/lib64').mkdir();(p/'cuda/lib64/libcudart.so').touch()
             nvcc=p/'cuda/bin/nvcc'
             nvcc.write_text('#!/bin/sh\nprintf "Cuda compilation tools, release 13.0, V13.0\\n"\n')
             nvcc.chmod(0o755)
@@ -42,7 +43,8 @@ Path(sys.argv[sys.argv.index('-o')+1]).write_text('cudss=1')
             (p/'src/one.c').touch();(p/'src/two.c').touch()
             goals=['build-cuda/obj/src/one.o','build-cuda/obj/src/two.o']
             args=['make','--no-print-directory','-j2','-C',tmp,
-                  'CUDA_ROOT='+str(p/'cuda'),'GPU_SM=90','CC='+str(compiler),*goals]
+                  'CUDA_ROOT='+str(p/'cuda'),'GPU_SM=90','CUDA_DRIVER_CHECK=0',
+                  'CC='+str(compiler),*goals]
             subprocess.run(args,check=True,capture_output=True,text=True)
             self.assertEqual((p/'install_calls').read_text(),'install\n')
             for name in goals:self.assertEqual((p/name).read_text(),'cudss=1')

@@ -114,18 +114,27 @@ make CUDA_ROOT=/usr/local/cuda-13.3
 make check-cudss CUDA_ROOT=/usr/local/cuda-13.3
 ```
 
-The selected toolkit also needs a compatible NVIDIA driver. On a server where
-an administrator has installed CUDA's forward-compatibility libraries for a
-supported GPU, enable that installation before running the solver, for example:
+Before building GPU targets, `make` tests CUDA startup without shell library
+overrides. It prefers the system driver. If that fails and the selected toolkit
+has an existing `compat/libcuda.so.1`, it tests that library in a separate process
+and links it explicitly only after successful initialization, so vendor-library
+startup cannot load a different driver first. The direct executable,
+shared library and Python dataset script then use the same verified runtime;
+no compatibility `LD_LIBRARY_PATH` export is needed. The build receipt is
+`.deps/cuda-runtime.json`. CMake performs the same check at configuration.
 
-```sh
-export LD_LIBRARY_PATH=/usr/local/cuda-13.3/compat${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-```
+If neither driver works, the build stops with the actual CUDA error. Choose a
+driver-compatible toolkit (for example `make CUDA_ROOT=/usr/local/cuda-12.8`)
+or ask the administrator for a supported driver/compatibility package. No build
+can fix an unsupported driver without a working alternative; `make` never
+installs or changes drivers. Re-run `make` after moving a build to another host
+or changing CUDA/driver installations. Previously failed builds may leave old
+executables, so use the quick-start `make && ...` command.
 
-This applies to the CUDA driver, not to the private BLAS/LAPACK libraries.
-If no compatible driver/compatibility package is available, choose a toolkit
-supported by the installed driver (for example `make CUDA_ROOT=/usr/local/cuda-12.8`)
-or ask the administrator to update the driver. `make` never modifies drivers.
+When CUDA reports no visible GPU, compilation is allowed with an explicit
+unverified-startup warning. `make CUDA_DRIVER_CHECK=0` (CMake:
+`-DHPRQP_CHECK_CUDA_DRIVER=OFF`) also permits an intentional compile-only build;
+it is not a fix for runtime incompatibility. Validate on the GPU host before use.
 
 Already have cuDSS? Use `make CUDSS_ROOT=/path/to/cudss`;
 that directory must contain `include/cudss.h` and its matching shared library.

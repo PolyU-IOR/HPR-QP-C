@@ -30,13 +30,21 @@ HPRQPStatus gpu_context_open(HPRQPGPUContext *context, int device_number)
     if (context == NULL) {
         return HPRQP_STATUS_INVALID_ARGUMENT;
     }
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count <= 0) {
+    cudaError_t startup_status = cudaGetDeviceCount(&device_count);
+    if (startup_status != cudaSuccess || device_count <= 0) {
+        fprintf(stderr, "HPR-QP-C GPU initialization failed: %s (CUDA error %d; devices %d).\n"
+                "Re-run make on this GPU host to validate the toolkit/driver combination; "
+                "also check CUDA_VISIBLE_DEVICES. This is not a model/solver convergence failure.\n",
+                cudaGetErrorString(startup_status), (int)startup_status, device_count);
         return HPRQP_STATUS_NOT_IMPLEMENTED;
     }
     if (device_number < 0 || device_number >= device_count) {
         return HPRQP_STATUS_INVALID_ARGUMENT;
     }
-    if (cudaSetDevice(device_number) != cudaSuccess) {
+    startup_status = cudaSetDevice(device_number);
+    if (startup_status != cudaSuccess) {
+        fprintf(stderr, "HPR-QP-C could not select GPU %d: %s (CUDA error %d).\n",
+                device_number, cudaGetErrorString(startup_status), (int)startup_status);
         return HPRQP_STATUS_NOT_IMPLEMENTED;
     }
 
