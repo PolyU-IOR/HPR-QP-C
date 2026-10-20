@@ -161,6 +161,7 @@ HPRQP_GPU_CUDA_SOURCES := \
 	src/gpu/solver.cu
 
 CPU_TEST_SOURCES := \
+	tests/test_mps_qcqp.cpp \
 	tests/test_defaults.c \
 	tests/test_qcqp.c \
 	tests/test_sparse_helpers.c \
@@ -464,6 +465,12 @@ $(BUILD_DIR)/test_sparse_helpers: $(call map_objects,$(BUILD_DIR),tests/test_spa
 $(BUILD_DIR)/test_mps_reader: $(call map_objects,$(BUILD_DIR),tests/test_mps_reader.c) $(CPU_TEST_SUPPORT_LIB) $(CPU_LIB)
 	@mkdir -p $(dir $@)
 	$(Q)$(CXX) -o $@ $(call map_objects,$(BUILD_DIR),tests/test_mps_reader.c) $(CPU_TEST_SUPPORT_LIB) $(CPU_LIB) $(CPU_LINK_LIBS)
+
+$(BUILD_DIR)/test_mps_qcqp: $(call map_objects,$(BUILD_DIR),tests/test_mps_qcqp.cpp) $(CPU_LIB)
+	$(Q)$(CXX) -o $@ $^ $(CPU_LINK_LIBS)
+
+$(GPU_BUILD_DIR)/test_mps_qcqp: $(call map_objects,$(GPU_BUILD_DIR),tests/test_mps_qcqp.cpp) $(GPU_LIB) | _require-cuda
+	$(Q)$(CUDA_NVCC) -o $@ $^ $(GPU_LINK_LIBS)
 
 $(BUILD_DIR)/test_builder_preprocess: $(call map_objects,$(BUILD_DIR),tests/test_builder_preprocess.c) $(CPU_TEST_SUPPORT_LIB) $(CPU_LIB)
 	@mkdir -p $(dir $@)

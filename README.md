@@ -12,6 +12,9 @@ This branch adds GPU standard second-order cones through the C array API.
 See [SOC usage and scope](docs/SOC.md) and [the C example](examples/solve_socp.c).
 Existing QP entry points and solver policies are retained.
 The [low-rank QCQP bridge](include/shared/qcqp.h) retains sparse quadratic factors.
+The executable and dataset runner also load diagonal convex `QCMATRIX`
+constraints directly from MPS files; see [supported input and limitations](docs/SOC.md#qcqp-mps-input).
+Unsupported quadratic input is rejected rather than silently dropped.
 The experimental Julia policy switches are not included in this production snapshot.
 
 ## Simplified CPU polishing and equality Gram

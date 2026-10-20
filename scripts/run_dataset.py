@@ -14,6 +14,7 @@ from pathlib import Path
 CSV_NAME = "HPRQP_result.csv"
 LOG_NAME = "HPRQP_log.txt"
 SUMMARY_NAMES = {"SGM10", "solved"}
+INPUT_FORMAT = "mps_qcmatrix_v1"
 COMPLETED_STATUSES = {"OPTIMAL", "OK", "MAX_ITER", "TIME_LIMIT"}
 FIELDNAMES = [
     "name",
@@ -32,6 +33,8 @@ FIELDNAMES = [
     "gram_active",
     "polish_attempts",
     "polish_accepted",
+    "input_format",
+    "row_cones",
 ]
 
 
@@ -105,6 +108,18 @@ def load_existing_rows(csv_path: Path) -> list[dict[str, str]]:
         reader = csv.DictReader(handle)
         rows = [row for row in reader if row.get("name", "") not in SUMMARY_NAMES]
     return rows
+
+
+def has_qcmatrix(path: Path) -> bool:
+    with path.open("r") as handle:
+        return any(line.split(maxsplit=1)[0:1] == ["QCMATRIX"] for line in handle)
+
+
+def can_resume(row: dict[str, str], path: Path) -> bool:
+    if row.get("status") not in COMPLETED_STATUSES:
+        return False
+    # Old QP records remain usable; old QCQP records may describe a relaxation.
+    return row.get("input_format") == INPUT_FORMAT or not has_qcmatrix(path)
 
 
 def append_log(log_path: Path, message: str) -> None:
@@ -223,7 +238,12 @@ def main() -> int:
 
     for index, mps_path in enumerate(files, start=1):
         if mps_path.name in completed:
-            continue
+            old = rows[row_index_by_name[mps_path.name]]
+            if can_resume(old, mps_path):
+                continue
+            notice = f"Invalidating pre-QCMATRIX-reader result: {mps_path.name}\n"
+            print(notice.strip())
+            append_log(log_path, notice)
 
         command = solver_command(args, mps_path)
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -263,7 +283,12 @@ def main() -> int:
             "gram_active": parsed.get("gram_active", ""),
             "polish_attempts": parsed.get("polish_attempts", ""),
             "polish_accepted": parsed.get("polish_accepted", ""),
+            "input_format": parsed.get("input_format", ""),
+            "row_cones": parsed.get("row_cones", ""),
         }
+        if row["status"] in COMPLETED_STATUSES and row["input_format"] != INPUT_FORMAT and has_qcmatrix(mps_path):
+            row["status"] = "UNVERIFIED_QCQP_READER"
+            append_log(log_path, "QCQP result rejected: rebuild solve_qp with the QCMATRIX input fix.\n")
         existing_index = row_index_by_name.get(mps_path.name)
         if existing_index is None:
             row_index_by_name[mps_path.name] = len(rows)

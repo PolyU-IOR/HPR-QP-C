@@ -4,6 +4,9 @@
 #include <math.h>
 #include <iostream>
 #include <iomanip>
+#include <new>
+#include <cerrno>
+#include <string>
 
 #define INITIAL_CAPACITY 8192
 #define INITIAL_NNZ_CAPACITY 100000
@@ -11,7 +14,18 @@
 /* Fast HPRLP_FLOAT parsing - atof is actually quite optimized in modern libc,
    but we can add inline hint */
 static inline HPRLP_FLOAT parse_double(const char *str) {
-    return atof(str);
+    std::string text(str);
+    for (char &c : text) if (c == 'd' || c == 'D') c = 'e';
+    return strtod(text.c_str(), nullptr);
+}
+
+static bool valid_number(const char *str) {
+    std::string text(str);
+    for (char &c : text) if (c == 'd' || c == 'D') c = 'e';
+    char *end = nullptr;
+    errno = 0;
+    double value = strtod(text.c_str(), &end);
+    return end != text.c_str() && *end == '\0' && isfinite(value) && errno != ERANGE;
 }
 
 /* ============================================================================
@@ -209,7 +223,7 @@ QPSData* qpsdata_create(void) {
 }
 
 QPSData* qpsdata_create_with_capacity(int var_cap, int con_cap, int nnz_cap) {
-    QPSData *qps = (QPSData*)calloc(1, sizeof(QPSData));
+    QPSData *qps = new (std::nothrow) QPSData{};
     if (!qps) return NULL;
     
     qps->nvar = 0;
@@ -298,7 +312,7 @@ void qpsdata_free(QPSData *qps) {
     namemap_free(&qps->varindices);
     namemap_free(&qps->conindices);
     
-    free(qps);
+    delete qps;
 }
 
 /* ============================================================================
@@ -339,11 +353,16 @@ void read_card_fixed(MPSCard *card, const char *line) {
         }
         card->f1[i] = '\0';
         
-        /* Check for NAME section */
-        if (strcmp(card->f1, "NAME") == 0 && len >= 15) {
-            strncpy(card->f2, line + 14, sizeof(card->f2) - 1);
-            trim(card->f2);
-            card->nfields = 2;
+        /* Header arguments are whitespace separated even in fixed MPS. */
+        if (strcmp(card->f1, "NAME") == 0 || strcmp(card->f1, "QCMATRIX") == 0 ||
+            strcmp(card->f1, "OBJSENSE") == 0) {
+            int j = i;
+            while (line[j] && isspace((unsigned char)line[j])) ++j;
+            int k = 0;
+            while (line[j] && !isspace((unsigned char)line[j]) && k < 255)
+                card->f2[k++] = line[j++];
+            card->f2[k] = '\0';
+            if (k) card->nfields = 2;
         }
         
         /* Check for OBJECT BOUND */
@@ -461,15 +480,19 @@ void read_card_free(MPSCard *card, const char *line) {
         
         char *token = strtok(linecopy, " \t");
         if (token) {
+            if (strlen(token) >= sizeof(card->f1)) { card->nfields = -1; return; }
             strcpy(card->f1, token);
             card->nfields = 1;
             
             /* Check for NAME section */
-            if (strcmp(card->f1, "NAME") == 0) {
+            if (strcmp(card->f1, "NAME") == 0 || strcmp(card->f1, "QCMATRIX") == 0 ||
+                strcmp(card->f1, "OBJSENSE") == 0) {
                 token = strtok(NULL, " \t");
                 if (token) {
+                    if (strlen(token) >= sizeof(card->f2)) { card->nfields = -1; return; }
                     strcpy(card->f2, token);
                     card->nfields = 2;
+                    if (strtok(NULL, " \t")) { card->nfields = -1; return; }
                 }
             }
             
@@ -494,12 +517,14 @@ void read_card_free(MPSCard *card, const char *line) {
     int i = 0;
     
     while (token && i < 6) {
+        if (strlen(token) >= 256) { card->nfields = -1; return; }
         strcpy(fields[i], token);
         i++;
         token = strtok(NULL, " \t");
     }
     
-    card->nfields = i;
+    card->nfields = token ? -1 : i;
+    if (i == 0) card->iscomment = true;
 }
 
 /* Get section type from header name */
@@ -514,6 +539,7 @@ SectionType get_section_type(const char *header) {
     if (strcmp(header, "RANGES") == 0) return SECTION_RANGES;
     if (strcmp(header, "QUADOBJ") == 0) return SECTION_QUADOBJ;
     if (strcmp(header, "QMATRIX") == 0) return SECTION_QMATRIX;
+    if (strcmp(header, "QCMATRIX") == 0) return SECTION_QCMATRIX;
     if (strcmp(header, "OBJECT BOUND") == 0) return SECTION_OBJECT_BOUND;
     return SECTION_NONE;
 }
@@ -529,6 +555,7 @@ void read_objsense_line(QPSData *qps, MPSCard *card) {
     } else if (strcmp(card->f1, "MAX") == 0) {
         qps->objsense = OBJSENSE_MAX;
     } else {
+        qps->parse_error = true;
         std::cerr << "Warning: Unrecognized objective sense: " << card->f1 << "\n";
     }
 }
@@ -544,8 +571,10 @@ RowType get_row_type(const char *type_str) {
 
 /* Read ROWS section line */
 void read_rows_line(QPSData *qps, MPSCard *card) {
-    if (card->nfields < 2) {
-        std::cerr << "Error: Line " << card->nline << " contains only " << card->nfields << " fields\n";
+    if (card->nfields != 2 || (strcmp(card->f1, "N") && strcmp(card->f1, "E") &&
+                             strcmp(card->f1, "L") && strcmp(card->f1, "G"))) {
+        qps->parse_error = true;
+        std::cerr << "Error: Invalid ROWS entry at line " << card->nline << "\n";
         return;
     }
     
@@ -572,7 +601,8 @@ void read_rows_line(QPSData *qps, MPSCard *card) {
     
     /* Check for duplicate */
     int existing = namemap_get(&qps->conindices, rowname, -2);
-    if (existing == con_index) {
+    if (existing != -2) {
+        qps->parse_error = true;
         std::cerr << "Error: Duplicate row name " << rowname << " at line " << card->nline << "\n";
         return;
     }
@@ -623,6 +653,7 @@ void add_constraint_entry(QPSData *qps, int row, int col, HPRLP_FLOAT val) {
 /* Read COLUMNS section line - optimized version */
 void read_columns_line(QPSData *qps, MPSCard *card, bool integer_section) {
     if (card->nfields < 3) {
+        qps->parse_error = true;
         std::cerr << "Error: Line " << card->nline << " contains only " << card->nfields << " fields\n";
         return;
     }
@@ -661,30 +692,32 @@ void read_columns_line(QPSData *qps, MPSCard *card, bool integer_section) {
     
     /* First coefficient pair */
     char *rowname1 = card->f2;
-    HPRLP_FLOAT val1 = atof(card->f3);
+    HPRLP_FLOAT val1 = parse_double(card->f3);
     
     int row1 = namemap_get(&qps->conindices, rowname1, -2);
     if (row1 == 0) {
         /* Objective */
-        qps->c[col] = val1;
+        qps->c[col] += val1;
     } else if (row1 > 0) {
         /* Regular constraint */
         add_constraint_entry(qps, row1 - 1, col, val1);
     } else if (row1 != -1) {
+        qps->parse_error = true;
         std::cerr << "Error: Unknown row " << rowname1 << " at line " << card->nline << "\n";
     }
     
     /* Second coefficient pair (optional) */
     if (card->nfields >= 5) {
         char *rowname2 = card->f4;
-        HPRLP_FLOAT val2 = atof(card->f5);
+        HPRLP_FLOAT val2 = parse_double(card->f5);
         
         int row2 = namemap_get(&qps->conindices, rowname2, -2);
         if (row2 == 0) {
-            qps->c[col] = val2;
+            qps->c[col] += val2;
         } else if (row2 > 0) {
             add_constraint_entry(qps, row2 - 1, col, val2);
         } else if (row2 != -1) {
+            qps->parse_error = true;
             std::cerr << "Error: Unknown row " << rowname2 << " at line " << card->nline << "\n";
         }
     }
@@ -693,6 +726,7 @@ void read_columns_line(QPSData *qps, MPSCard *card, bool integer_section) {
 /* Read RHS section line */
 void read_rhs_line(QPSData *qps, MPSCard *card) {
     if (card->nfields < 3) {
+        qps->parse_error = true;
         std::cerr << "Error: Line " << card->nline << " contains only " << card->nfields << " fields\n";
         return;
     }
@@ -708,7 +742,7 @@ void read_rhs_line(QPSData *qps, MPSCard *card) {
     
     /* First RHS value */
     char *rowname = card->f2;
-    HPRLP_FLOAT val = atof(card->f3);
+    HPRLP_FLOAT val = parse_double(card->f3);
     
     int row = namemap_get(&qps->conindices, rowname, -2);
     if (row == 0) {
@@ -728,13 +762,14 @@ void read_rhs_line(QPSData *qps, MPSCard *card) {
             qps->lcon[idx] = val;
         }
     } else {
+        qps->parse_error = true;
         std::cerr << "Error: Unknown row " << rowname << "\n";
     }
     
     /* Second RHS value (optional) */
     if (card->nfields >= 5) {
         rowname = card->f4;
-        val = atof(card->f5);
+        val = parse_double(card->f5);
         
         row = namemap_get(&qps->conindices, rowname, -2);
         if (row == 0) {
@@ -753,6 +788,7 @@ void read_rhs_line(QPSData *qps, MPSCard *card) {
                 qps->lcon[idx] = val;
             }
         } else {
+            qps->parse_error = true;
             std::cerr << "Error: Unknown row " << rowname << "\n";
         }
     }
@@ -762,6 +798,7 @@ void read_rhs_line(QPSData *qps, MPSCard *card) {
 static void apply_range_to_constraint(QPSData *qps, const char *rowname, HPRLP_FLOAT val, int line_num) {
     int row = namemap_get(&qps->conindices, rowname, -2);
     if (row == 0 || row == -1) {
+        qps->parse_error = true;
         std::cerr << "Error: Encountered objective row " << rowname << " in RANGES section (l. " << line_num << ")\n";
         return;
     } else if (row > 0) {
@@ -780,6 +817,7 @@ static void apply_range_to_constraint(QPSData *qps, const char *rowname, HPRLP_F
             qps->ucon[idx] = qps->lcon[idx] + fabs(val);
         }
     } else {
+        qps->parse_error = true;
         std::cerr << "Error: Unknown row " << rowname << " in RANGES section (l. " << line_num << ")\n";
     }
 }
@@ -787,6 +825,7 @@ static void apply_range_to_constraint(QPSData *qps, const char *rowname, HPRLP_F
 /* Read RANGES section line */
 void read_ranges_line(QPSData *qps, MPSCard *card) {
     if (card->nfields < 3) {
+        qps->parse_error = true;
         std::cerr << "Error: Line " << card->nline << " contains only " << card->nfields << " fields\n";
         return;
     }
@@ -802,13 +841,13 @@ void read_ranges_line(QPSData *qps, MPSCard *card) {
     
     /* Process first constraint-value pair */
     char *rowname = card->f2;
-    HPRLP_FLOAT val = atof(card->f3);
+    HPRLP_FLOAT val = parse_double(card->f3);
     apply_range_to_constraint(qps, rowname, val, card->nline);
     
     /* Process second constraint-value pair if present */
     if (card->nfields >= 5 && strlen(card->f4) > 0) {
         char *rowname2 = card->f4;
-        HPRLP_FLOAT val2 = atof(card->f5);
+        HPRLP_FLOAT val2 = parse_double(card->f5);
         apply_range_to_constraint(qps, rowname2, val2, card->nline);
     }
 }
@@ -816,6 +855,7 @@ void read_ranges_line(QPSData *qps, MPSCard *card) {
 /* Read BOUNDS section line */
 void read_bounds_line(QPSData *qps, MPSCard *card) {
     if (card->nfields < 3) {
+        qps->parse_error = true;
         std::cerr << "Error: Line " << card->nline << " contains only " << card->nfields << " fields\n";
         return;
     }
@@ -832,6 +872,7 @@ void read_bounds_line(QPSData *qps, MPSCard *card) {
     char *varname = card->f3;
     int col = namemap_get(&qps->varindices, varname, -1);
     if (col < 0) {
+        qps->parse_error = true;
         std::cerr << "Error: Unknown column " << varname << "\n";
         return;
     }
@@ -858,11 +899,12 @@ void read_bounds_line(QPSData *qps, MPSCard *card) {
     
     /* Bounds that require a value */
     if (card->nfields < 4) {
+        qps->parse_error = true;
         std::cerr << "Error: At least 4 fields required for " << btype << " bounds\n";
         return;
     }
     
-    HPRLP_FLOAT val = atof(card->f4);
+    HPRLP_FLOAT val = parse_double(card->f4);
     
     if (strcmp(btype, "LO") == 0) {
         qps->lvar[col] = val;
@@ -878,6 +920,7 @@ void read_bounds_line(QPSData *qps, MPSCard *card) {
         qps->vartypes[col] = VTYPE_INTEGER;
         qps->uvar[col] = val;
     } else {
+        qps->parse_error = true;
         std::cerr << "Warning: Unknown bound type " << btype << "\n";
     }
 }
@@ -885,22 +928,25 @@ void read_bounds_line(QPSData *qps, MPSCard *card) {
 /* Read QUADOBJ section line */
 void read_quadobj_line(QPSData *qps, MPSCard *card) {
     if (card->nfields < 3) {
+        qps->parse_error = true;
         std::cerr << "Error: Line " << card->nline << " contains only " << card->nfields << " fields\n";
         return;
     }
     
     char *colname1 = card->f1;
     char *colname2 = card->f2;
-    HPRLP_FLOAT val = atof(card->f3);
+    HPRLP_FLOAT val = parse_double(card->f3);
     
     int col1 = namemap_get(&qps->varindices, colname1, -1);
     int col2 = namemap_get(&qps->varindices, colname2, -1);
     
     if (col1 < 0) {
+        qps->parse_error = true;
         std::cerr << "Error: Unknown variable " << colname1 << "\n";
         return;
     }
     if (col2 < 0) {
+        qps->parse_error = true;
         std::cerr << "Error: Unknown variable " << colname2 << "\n";
         return;
     }
@@ -919,6 +965,30 @@ void read_quadobj_line(QPSData *qps, MPSCard *card) {
     qps->qnnz++;
 }
 
+static bool read_qcmatrix_line(QPSData *qps, MPSCard *card) {
+    if (card->nfields != 3 || !valid_number(card->f3)) {
+        std::cerr << "Error: Invalid QCMATRIX coefficient at line " << card->nline << "\n";
+        return false;
+    }
+    int i = namemap_get(&qps->varindices, card->f1, -1);
+    int j = namemap_get(&qps->varindices, card->f2, -1);
+    if (i < 0 || j < 0) {
+        std::cerr << "Error: Unknown QCMATRIX variable at line " << card->nline << "\n";
+        return false;
+    }
+    double value = parse_double(card->f3);
+    if (i != j && value != 0.0) {
+        std::cerr << "Error: Non-diagonal QCMATRIX is not supported by the MPS loader; "
+                     "use build_from_QAbc_qc_factors with a PSD factor.\n";
+        return false;
+    }
+    if (value != 0.0) {
+        qps->quadratic_rows.back().columns.push_back(i);
+        qps->quadratic_rows.back().values.push_back(value);
+    }
+    return true;
+}
+
 /* ============================================================================
  * Main Reading Function
  * ========================================================================== */
@@ -930,12 +1000,8 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
     
     QPSData *qps = qpsdata_create_with_capacity(est_vars, est_cons, est_nnz);
     if (!qps) return NULL;
-    
-    /* Use larger buffer for better I/O performance */
-    char *buffer = (char*)malloc(65536);  /* 64KB buffer */
-    if (buffer) {
-        setvbuf(fp, buffer, _IOFBF, 65536);
-    }
+    try {
+    /* Let stdio own its buffer: readqps_from_file does not own/close fp. */
     
     MPSCard card;
     card.nline = 0;
@@ -951,6 +1017,7 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
     bool endata_read = false;
     
     bool integer_section = false;
+    std::vector<bool> quadratic_seen;
     
     SectionType current_section = SECTION_NONE;
     
@@ -958,6 +1025,10 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
     
     while (fgets(line, sizeof(line), fp)) {
         card.nline++;
+        if (!strchr(line, '\n') && !feof(fp)) {
+            std::cerr << "Error: MPS line too long at " << card.nline << "\n";
+            goto error;
+        }
         
         /* Remove newline */
         line[strcspn(line, "\r\n")] = 0;
@@ -971,6 +1042,10 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
         
         /* Skip comments and empty lines */
         if (card.iscomment) continue;
+        if (card.nfields < 0) {
+            std::cerr << "Error: Invalid MPS fields at line " << card.nline << "\n";
+            goto error;
+        }
         
         /* Handle section headers */
         if (card.isheader) {
@@ -991,6 +1066,10 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
                 }
                 objsense_section_read = true;
                 current_section = SECTION_OBJSENSE;
+                if (card.nfields == 2) {
+                    strcpy(card.f1, card.f2);
+                    read_objsense_line(qps, &card);
+                }
             } else if (sec == SECTION_ROWS) {
                 if (rows_section_read) {
                     std::cerr << "Error: More than one ROWS section\n";
@@ -1052,7 +1131,26 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
                     goto error;
                 }
                 quadobj_section_read = true;
+                qps->full_objective_matrix = strcmp(card.f1, "QMATRIX") == 0;
                 current_section = SECTION_QUADOBJ;
+            } else if (sec == SECTION_QCMATRIX) {
+                if (!columns_section_read || card.nfields != 2) {
+                    std::cerr << "Error: QCMATRIX requires a row name after COLUMNS\n";
+                    goto error;
+                }
+                int row = namemap_get(&qps->conindices, card.f2, -1) - 1;
+                if (row < 0 || row >= qps->ncon) {
+                    std::cerr << "Error: Unknown/non-constraint QCMATRIX row " << card.f2 << "\n";
+                    goto error;
+                }
+                if (quadratic_seen.empty()) quadratic_seen.resize(qps->ncon, false);
+                if (quadratic_seen[row]) {
+                    std::cerr << "Error: Duplicate QCMATRIX block for " << card.f2 << "\n";
+                    goto error;
+                }
+                quadratic_seen[row] = true;
+                qps->quadratic_rows.push_back(MPSQuadraticRow{row, {}, {}});
+                current_section = SECTION_QCMATRIX;
             } else if (sec == SECTION_ENDATA) {
                 if (endata_read) {
                     std::cerr << "Error: More than one ENDATA section\n";
@@ -1060,11 +1158,33 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
                 }
                 endata_read = true;
                 break;
+            } else {
+                std::cerr << "Error: Unsupported MPS section " << card.f1
+                          << " at line " << card.nline << "\n";
+                goto error;
             }
             
+            if (qps->parse_error) goto error;
             continue;
         }
         
+        /* Reject truncated/invalid numeric pairs before legacy handlers. */
+        if (current_section == SECTION_COLUMNS || current_section == SECTION_RHS ||
+            current_section == SECTION_RANGES || current_section == SECTION_QUADOBJ) {
+            bool marker = current_section == SECTION_COLUMNS && strcmp(card.f2, "'MARKER'") == 0;
+            if (!marker && ((card.nfields != 3 && card.nfields != 5) ||
+                (current_section == SECTION_QUADOBJ && card.nfields != 3) ||
+                !valid_number(card.f3) || (card.nfields == 5 && !valid_number(card.f5)))) {
+                std::cerr << "Error: Invalid MPS coefficient at line " << card.nline << "\n";
+                goto error;
+            }
+        }
+        if (current_section == SECTION_BOUNDS &&
+            (card.nfields < 3 || card.nfields > 4 ||
+             (card.nfields == 4 && !valid_number(card.f4)))) {
+            std::cerr << "Error: Invalid MPS bound at line " << card.nline << "\n";
+            goto error;
+        }
         /* Process line based on current section */
         if (current_section == SECTION_OBJSENSE) {
             read_objsense_line(qps, &card);
@@ -1078,7 +1198,8 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
                 } else if (strcmp(card.f3, "'INTEND'") == 0) {
                     integer_section = false;
                 } else {
-                    std::cerr << "Error: Ignoring marker " << card.f3 << " at line " << card.nline << "\n";
+                    std::cerr << "Error: Unknown marker " << card.f3 << " at line " << card.nline << "\n";
+                    goto error;
                 }
                 continue;
             }
@@ -1091,15 +1212,19 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
             read_ranges_line(qps, &card);
         } else if (current_section == SECTION_QUADOBJ) {
             read_quadobj_line(qps, &card);
+        } else if (current_section == SECTION_QCMATRIX) {
+            if (!read_qcmatrix_line(qps, &card)) goto error;
+        } else {
+            std::cerr << "Error: Data outside an MPS section at line " << card.nline << "\n";
+            goto error;
         }
+        if (qps->parse_error) goto error;
     }
     
     if (!endata_read) {
-        std::cerr << "Warning: Reached end of file before ENDATA section\n";
+        std::cerr << "Error: Reached end of file before ENDATA section\n";
+        goto error;
     }
-    
-    /* Free I/O buffer */
-    if (buffer) free(buffer);
     
     /* Finalize variable bounds */
     for (int j = 0; j < qps->nvar; j++) {
@@ -1130,9 +1255,11 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
     }
     
     return qps;
+    } catch (const std::bad_alloc &) {
+        std::cerr << "Error: Allocation failed while reading MPS\n";
+    }
     
 error:
-    if (buffer) free(buffer);
     qpsdata_free(qps);
     return NULL;
 }
@@ -1284,27 +1411,15 @@ CSRMatrix* coo_to_csr(int nrows, int ncols, int nnz,
         }
     }
     
-    /* Build row_ptr array */
-    int row = 0;
-    csr->row_ptr[0] = 0;
-    
-    for (int i = 0; i < unique_nnz; i++) {
-        /* Find which row this entry belongs to */
-        int entry_row = entries[i].row;
-        
-        /* Fill row_ptr for all rows up to and including this entry's row */
-        while (row < entry_row) {
-            row++;
-            csr->row_ptr[row] = i;
-        }
+    /* Count unique (row,column) entries in each row, then prefix sum. */
+    for (int i = 0; i < nnz; ++i) {
+        if (i == 0 || entries[i].row != entries[i-1].row ||
+            entries[i].col != entries[i-1].col)
+            ++csr->row_ptr[entries[i].row + 1];
     }
-    
-    /* Fill remaining row pointers */
-    while (row < nrows) {
-        row++;
-        csr->row_ptr[row] = unique_nnz;
-    }
-    
+    for (int row = 0; row < nrows; ++row)
+        csr->row_ptr[row + 1] += csr->row_ptr[row];
+
     free(entries);
     return csr;
 }

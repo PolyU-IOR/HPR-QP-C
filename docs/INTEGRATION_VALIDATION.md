@@ -1,5 +1,40 @@
 # Clean production snapshot qualification — 20 October 2026
 
+## QCQP MPS repair qualification
+
+The original clean package had a reader defect: `QCMATRIX` sections were
+silently skipped by the ordinary executable. Historical QCQP benchmarks used a
+separate canonical-input bridge and did not test that path.
+
+The repaired `build_from_mps` automatically converts supported diagonal convex
+quadratic rows through the existing sparse SOC builder. All **42 raw MPS
+models (21 QP and 21 QCQP)** match the saved canonical models: Q/A/AT, objective,
+variable/row bounds, cone offsets and RHS, with coefficient tolerance 1e-13.
+This is model-equivalence validation, not a fresh full performance benchmark.
+
+The host Make regression suite and all20 CMake tests pass. Focused tests cover
+coefficient conventions, duplicate aggregation, inequality reversal, zero
+quadratic parts, full QMATRIX objectives, unsupported/nonconvex constraints
+and malformed records. Address/undefined-behavior checks pass; local
+LeakSanitizer is unavailable under the sandbox's ptrace environment.
+
+On server113 H100 / CUDA13.3, eight checks pass, including:
+
+- default executable and dataset entrypoints on an analytic QCQP;
+- QPLIB_2482:361 cones, native OPTIMAL, error9.9547433763e-9;
+- invalidation of a legacy false-success CSV and correct resumption thereafter;
+- explicit rejection of unsupported input and an ordinary-QP regression;
+- CUDA memcheck with zero errors and zero leaked bytes.
+
+The first GPU preflight stopped before running anything because the selected
+device became occupied. Validation then used another verified idle device.
+The solver, common CPU corrections, Gram rules and GPU kernels are unchanged.
+See [input scope](SOC.md#qcqp-mps-input). General non-diagonal QCMATRIX
+factorization remains outside the MPS loader; the sparse-factor C API remains
+available.
+
+## Earlier clean snapshot qualification
+
 The release is based directly on verified GitHub `main` commit
 `3e74c1eaee511879f76a6ebfe0e8070a915b9b65`. The saved production reference is
 `a2f2183c5279ae620ee8c416215d221929cbf06c`. Its full42 validation achieved36 native

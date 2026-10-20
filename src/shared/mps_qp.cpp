@@ -1,9 +1,15 @@
 #include "shared/build.h"
 #include "shared/mps_reader.h"
 #include "shared/sparse.h"
+#include "shared/qcqp.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <new>
+#include <utility>
+#include <vector>
 
 static HPRQPStatus copy_csr_matrix(HPRQPMatrixCSR *dest, const CSRMatrix *src)
 {
@@ -111,6 +117,94 @@ static HPRQPStatus symmetrize_q_for_mps(HPRQPMatrixCSR *dest, const HPRQPMatrixC
     return HPRQP_STATUS_OK;
 }
 
+/* Split quadratic rows out of A, preserving the order of the remaining rows.
+ * QCMATRIX stores x' H x, whereas the factor API uses .5*x' D x; D = 2*H.
+ * Only diagonal convex inequalities are supported by this file loader. */
+static HPRQPStatus build_qc_mps(const QPSData *qps, const HPRQPMatrixCSR *Q,
+                              const HPRQPMatrixCSR *A, HPRQPModel *model)
+{
+    std::vector<const MPSQuadraticRow *> rows(qps->ncon, nullptr);
+    for (const auto &qc : qps->quadratic_rows) rows[qc.row] = &qc;
+    std::vector<std::vector<std::pair<int, double>>> diag(qps->ncon);
+    std::vector<double> signs(qps->ncon, 1.0), constant, al, au;
+    size_t nq = 0, dnz = 0, cnz = 0, anz = 0;
+    for (int r = 0; r < qps->ncon; ++r) {
+        if (rows[r]) {
+            const auto &qc = *rows[r];
+            auto &d = diag[r];
+            for (size_t k = 0; k < qc.values.size(); ++k)
+                d.emplace_back(qc.columns[k], qc.values[k]);
+            std::sort(d.begin(), d.end());
+            size_t write = 0;
+            for (const auto entry : d) {
+                if (write && d[write-1].first == entry.first) d[write-1].second += entry.second;
+                else d[write++] = entry;
+            }
+            d.resize(write);
+            d.erase(std::remove_if(d.begin(), d.end(),
+                                  [](const auto &x) { return x.second == 0.0; }), d.end());
+            if (!d.empty()) {
+                if (qps->lcon[r] == -INFINITY && std::isfinite(qps->ucon[r])) signs[r] = 1.0;
+                else if (qps->ucon[r] == INFINITY && std::isfinite(qps->lcon[r])) signs[r] = -1.0;
+                else {
+                    fprintf(stderr, "Error: QCMATRIX row '%s' needs a one-sided inequality; "
+                                    "quadratic equalities/ranges/free rows are unsupported.\n", qps->connames[r]);
+                    return HPRQP_STATUS_INVALID_ARGUMENT;
+                }
+                for (auto &entry : d) {
+                    entry.second *= 2.0 * signs[r];
+                    if (!std::isfinite(entry.second) || entry.second < 0.0) {
+                        fprintf(stderr, "Error: QCMATRIX row '%s' is not convex in its inequality sense.\n",
+                                qps->connames[r]);
+                        return HPRQP_STATUS_INVALID_ARGUMENT;
+                    }
+                }
+                ++nq;
+                dnz += d.size();
+                cnz += A->row_ptr[r+1] - A->row_ptr[r];
+                continue;
+            }
+        }
+        anz += A->row_ptr[r+1] - A->row_ptr[r];
+    }
+    if (!nq) return build_model_from_arrays(Q, A, qps->c, qps->lcon, qps->ucon,
+                                           qps->lvar, qps->uvar, qps->c0, model);
+    /* RAII prevents leaking a partially constructed input if allocation fails. */
+    struct Matrix {
+        HPRQPMatrixCSR value{};
+        ~Matrix() { matrix_csr_free(&value); }
+    } linear, C, D;
+    HPRQPStatus status = matrix_csr_alloc(&linear.value, qps->ncon-nq, qps->nvar, anz);
+    if (status != HPRQP_STATUS_OK) return status;
+    status = matrix_csr_alloc(&C.value, nq, qps->nvar, cnz);
+    if (status != HPRQP_STATUS_OK) return status;
+    status = matrix_csr_alloc(&D.value, nq, qps->nvar, dnz);
+    if (status != HPRQP_STATUS_OK) return status;
+    size_t lr = 0, qr = 0, ak = 0, ck = 0, dk = 0;
+    for (int r = 0; r < qps->ncon; ++r) {
+        if (diag[r].empty()) {
+            for (size_t k = A->row_ptr[r]; k < A->row_ptr[r+1]; ++k) {
+                linear.value.col_ind[ak] = A->col_ind[k];
+                linear.value.values[ak++] = A->values[k];
+            }
+            linear.value.row_ptr[++lr] = ak;
+            al.push_back(qps->lcon[r]); au.push_back(qps->ucon[r]);
+        } else {
+            for (size_t k = A->row_ptr[r]; k < A->row_ptr[r+1]; ++k) {
+                C.value.col_ind[ck] = A->col_ind[k];
+                C.value.values[ck++] = signs[r] * A->values[k];
+            }
+            for (const auto &entry : diag[r]) {
+                D.value.col_ind[dk] = entry.first; D.value.values[dk++] = entry.second;
+            }
+            constant.push_back(signs[r] > 0.0 ? -qps->ucon[r] : qps->lcon[r]);
+            C.value.row_ptr[qr+1] = ck; D.value.row_ptr[++qr] = dk;
+        }
+    }
+    return build_from_QAbc_qc_diagonal(Q, &linear.value, qps->c, al.data(), au.data(),
+        qps->lvar, qps->uvar, qps->c0, &C.value, constant.data(), &D.value, model);
+}
+
 extern "C" HPRQPStatus build_model_from_mps(const char *mps_path, HPRQPModel *model)
 {
     QPSData *qps;
@@ -130,6 +224,16 @@ extern "C" HPRQPStatus build_model_from_mps(const char *mps_path, HPRQPModel *mo
 
     qps = readqps(mps_path, MPS_FREE);
     if (qps == nullptr) {
+        return HPRQP_STATUS_INVALID_ARGUMENT;
+    }
+    if (qps->objsense == OBJSENSE_MAX) {
+        fprintf(stderr, "Error: Maximization MPS input is unsupported; supply a convex minimization model.\n");
+        qpsdata_free(qps);
+        return HPRQP_STATUS_INVALID_ARGUMENT;
+    }
+    for (int j = 0; j < qps->nvar; ++j) if (qps->vartypes[j] != VTYPE_CONTINUOUS) {
+        fprintf(stderr, "Error: Discrete/semi-continuous MPS variables are unsupported.\n");
+        qpsdata_free(qps);
         return HPRQP_STATUS_INVALID_ARGUMENT;
     }
 
@@ -163,7 +267,23 @@ extern "C" HPRQPStatus build_model_from_mps(const char *mps_path, HPRQPModel *mo
         return status;
     }
 
-    {
+    if (qps->full_objective_matrix) {
+        for (size_t r = 0; r < Q.nrow; ++r) {
+            for (size_t k = Q.row_ptr[r]; k < Q.row_ptr[r+1]; ++k) {
+                size_t col = Q.col_ind[k];
+                const size_t *begin = Q.col_ind + Q.row_ptr[col];
+                const size_t *end = Q.col_ind + Q.row_ptr[col+1];
+                const size_t *other = std::lower_bound(begin, end, r);
+                double value = other != end && *other == r ? Q.values[other-Q.col_ind] : 0.0;
+                if (value != Q.values[k]) {
+                    fprintf(stderr, "Error: QMATRIX must contain a symmetric full objective matrix.\n");
+                    matrix_csr_free(&A); matrix_csr_free(&Q);
+                    csr_free(csr_A); csr_free(csr_Q); qpsdata_free(qps);
+                    return HPRQP_STATUS_INVALID_ARGUMENT;
+                }
+            }
+        }
+    } else {
         HPRQPMatrixCSR sym_Q = {};
         status = symmetrize_q_for_mps(&sym_Q, &Q);
         if (status != HPRQP_STATUS_OK) {
@@ -178,7 +298,8 @@ extern "C" HPRQPStatus build_model_from_mps(const char *mps_path, HPRQPModel *mo
         Q = sym_Q;
     }
 
-    status = build_model_from_arrays(&Q,
+    try {
+    status = qps->quadratic_rows.empty() ? build_model_from_arrays(&Q,
                                      &A,
                                      qps->c,
                                      qps->lcon,
@@ -186,7 +307,10 @@ extern "C" HPRQPStatus build_model_from_mps(const char *mps_path, HPRQPModel *mo
                                      qps->lvar,
                                      qps->uvar,
                                      qps->c0,
-                                     model);
+                                     model) : build_qc_mps(qps, &Q, &A, model);
+    } catch (const std::bad_alloc &) {
+        status = HPRQP_STATUS_ALLOCATION_FAILED;
+    }
 
     matrix_csr_free(&A);
     matrix_csr_free(&Q);

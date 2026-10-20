@@ -3,8 +3,9 @@
 Upstream base: `PolyU-IOR/HPR-QP-C`, `main` at
 `3e74c1eaee511879f76a6ebfe0e8070a915b9b65`, verified20October2026.
 Branch: `test/simple-polishing`. Previous local history remains preserved at
-`codex/archive-simple-polishing-a2f2183`; this release is a single local commit
-on the upstream base. Nothing is pushed by the packaging procedure.
+`codex/archive-simple-polishing-a2f2183`. The clean integration commit is followed
+by the QCQP MPS input repair; both are local commits on the upstream base.
+Nothing is pushed by the packaging procedure.
 
 | Included change | Default behavior |
 | --- | --- |
@@ -13,6 +14,7 @@ on the upstream base. Nothing is pushed by the packaging procedure.
 | SpMVOp | Automatic in supported cuSPARSE paths on CUDA13.3+, older-toolkit fallback retained. |
 | Packed/fused GPU access | Enabled subject to common shape, padding and memory guards; scaled coefficients refreshed. |
 | Native SOC / low-rank QCQP-to-SOC | Required infrastructure for the validated QCQP cases; sparse factors retained. |
+| QCQP MPS loading | Diagonal convex QCMATRIX rows automatically converted by the default executable/dataset path; unsupported input fails explicitly. |
 | Build, installation, entrypoints, tests and notes | Automatic CUDA/cuDSS discovery, relative installed-worker lookup, default executable/dataset selection and honest cost reporting. |
 
 The snapshot excludes the old polishing portfolio/history acceleration,

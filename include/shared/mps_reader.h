@@ -2,6 +2,7 @@
 #define HPRQP_MPS_READER_H
 
 #include <cstdio>
+#include <vector>
 
 typedef double HPRLP_FLOAT;
 
@@ -74,6 +75,7 @@ enum SectionType {
     SECTION_RANGES = 7,
     SECTION_QUADOBJ = 8,
     SECTION_QMATRIX = 8,  /* Same as QUADOBJ */
+    SECTION_QCMATRIX = 9,
     SECTION_OBJECT_BOUND = 10
 };
 
@@ -93,8 +95,20 @@ struct NameIndexMap {
     int num_buckets;       /* Number of hash buckets */
 };
 
+/* Supported QCMATRIX form: sum_j values[j]*x[columns[j]]^2 + A[row,:]*x.
+ * Unlike QUADOBJ, QCMATRIX has NO implicit one-half multiplier.
+ * Nonzero cross terms are rejected; general sparse factors use the C API. */
+struct MPSQuadraticRow {
+    int row;
+    std::vector<int> columns;
+    std::vector<double> values;
+};
+
 /* QPSData structure to hold the model data */
 struct QPSData {
+    std::vector<MPSQuadraticRow> quadratic_rows;
+    bool parse_error;
+    bool full_objective_matrix; /* QMATRIX stores both triangles. */
     /* Problem dimensions */
     int nvar;  /* Number of variables */
     int ncon;  /* Number of constraints */

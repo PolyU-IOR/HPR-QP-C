@@ -227,6 +227,8 @@ int main(int argc, char **argv)
 
     status = solve(&model, &params, &results);
     printf("model: %s\n", mps_path);
+    printf("input_format: mps_qcmatrix_v1\n");
+    printf("row_cones: %zu\n", model.num_row_cones);
     printf("status: %s\n", status_name(status));
     printf("iter: %zu\n", results.iter);
     printf("time: %.6f\n", results.time);

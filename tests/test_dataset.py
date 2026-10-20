@@ -14,6 +14,17 @@ spec.loader.exec_module(dataset)
 
 
 class Dataset(unittest.TestCase):
+    def test_legacy_qcqp_cannot_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "qc.mps"
+            path.write_text("NAME TEST\nQCMATRIX QC\n X X 0.5\nENDATA\n")
+            old = {"status": "OPTIMAL"}
+            self.assertFalse(dataset.can_resume(old, path))
+            old["input_format"] = dataset.INPUT_FORMAT
+            self.assertTrue(dataset.can_resume(old, path))
+            old["status"] = "EXIT_1"
+            self.assertFalse(dataset.can_resume(old, path))
+
     def test_selection(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -26,6 +37,22 @@ class Dataset(unittest.TestCase):
             self.assertEqual(dataset.resolve_solver(args, root), root / "build/solve_qp")
             args.build_dir = str(root / "explicit")
             self.assertEqual(dataset.resolve_solver(args, root), root / "explicit/solve_qp")
+
+    def test_old_executable_cannot_claim_qcqp_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "inputs"; data.mkdir()
+            (data / "qc.mps").write_text("NAME QC\nQCMATRIX ROW\n X X 0.5\nENDATA\n")
+            exe = root / "solve_qp"
+            exe.write_text("#!/usr/bin/env python3\nprint('status: OPTIMAL\\ntime: 1')\n")
+            exe.chmod(0o755)
+            subprocess.run([sys.executable, str(ROOT / "scripts/run_dataset.py"),
+                            str(data), str(root / "out"), "--build-dir", str(root)],
+                           check=True, capture_output=True)
+            with (root / "out/HPRQP_result.csv").open() as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(rows[0]["status"], "UNVERIFIED_QCQP_READER")
+            self.assertEqual(rows[-1]["alg_time"], "0")
 
     def test_default_command_resume_and_costs(self):
         with tempfile.TemporaryDirectory() as tmp:

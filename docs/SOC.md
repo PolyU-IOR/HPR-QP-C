@@ -51,13 +51,53 @@ status = build_from_QAbc_soc(&Q, &A, c, AL, AU, l, u,
   `model_copy` includes cone metadata and offsets. Cone models retain all rows,
   including zero rows that encode constant cone components.
 - A NULL or zero-initialized cone spec uses the existing QP preprocessing and
-  GPU path. Existing `build_from_QAbc`, MPS and binding functions retain their
+  GPU path. Existing `build_from_QAbc` and ordinary QP MPS inputs retain their
   QP behavior. Rebuild C clients: the exposed `HPRQPModel` layout has new fields.
 - Use `params.use_gpu=1`. Requesting the CPU solver for a cone model returns
-  `HPRQP_STATUS_NOT_IMPLEMENTED`. The initial SOC surface is the C array API;
-  CBF parsing and JuMP/Python cone APIs are not added here.
+  `HPRQP_STATUS_NOT_IMPLEMENTED`. CBF parsing and JuMP/Python cone APIs are
+  not added here.
   `build_from_QAbc_qc_factors` and `build_from_QAbc_qc_diagonal` provide sparse
   low-rank QCQP-to-standard-SOC bridges; see `include/shared/qcqp.h`.
+
+## QCQP MPS input
+
+`build_from_mps`, `solve_qp`, and `scripts/run_dataset.py` automatically convert
+supported `QCMATRIX <row-name>` blocks to SOCs. No conversion script or feature
+flag is needed. Build the CUDA executable to solve these cone models.
+
+The file loader supports **diagonal quadratic constraints**, covering all 21
+QCQP files in the validated corpus. For an upper inequality
+`sum h_j*x_j^2 + a*x <= b`, it requires `h_j >= 0`; a lower inequality with
+nonpositive diagonal is multiplied by -1 first. It preserves the linear
+coefficients, RHS, objective and variable bounds, removes each quadratic row
+from the ordinary linear rows, and appends its equivalent SOC. A zero quadratic
+part remains an ordinary linear row.
+
+`QCMATRIX` represents `x'*H*x`, without the quadratic objective's implicit
+one-half. The loader supplies `D=2*H` to the existing half-Hessian API, giving
+`(-a*x+b+1, -a*x+b-1, 2*sqrt(h_j)*x_j)` in a Lorentz cone. Each strictly positive
+diagonal contributes one sparse factor row; there is no dense n-by-n matrix.
+See the [MPS QCMATRIX convention](https://docs.gurobi.com/projects/optimizer/en/current/reference/fileformats/modelformats.html#qcmatrix-section).
+
+Nonzero cross terms, nonconvex constraint senses, nonzero quadratic equalities
+or ranged rows, discrete variables and maximization input are rejected with an
+error. Unknown sections and malformed quadratic records are also rejected,
+rather than silently ignored. General PSD quadratic constraints can still be
+supplied as sparse factors through `build_from_QAbc_qc_factors`; the MPS loader
+does not compute a general sparse PSD factorization.
+
+```sh
+./build-cuda/solve_qp tests/data/qcqp/simple_qcqp.mps --stoptol 1e-8
+python3 scripts/run_dataset.py /data/qp_data/QCQP results/qcqp --stoptol 1e-8
+```
+
+The executable prints `row_cones` so the conversion is visible. The included
+fixture has one cone and optimum objective 1 at x=2. It must not be treated as
+an ordinary linear program. The dataset runner records the reader version and
+cone count. It invalidates legacy completed QCQP records lacking the new reader
+marker, and refuses to count results from an older executable as QCQP successes.
+Old ordinary QP records remain eligible for resumption. A new result directory
+is useful when retaining the earlier logs for comparison.
 
 See [solve_socp.c](../examples/solve_socp.c) for a complete example:
 `min t`, `(t-2,3,4) in SOC`, whose optimum is t=7.
