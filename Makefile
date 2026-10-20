@@ -102,6 +102,10 @@ COMMON_CXXFLAGS := -O2 -DNDEBUG $(WARNING_FLAGS) -std=c++17 -fPIC
 COMMON_NVCCFLAGS := -O2 -DNDEBUG $(if $(filter 1,$(SHOW_WARNINGS)),,-w) --std=c++17 $(CUDA_ARCH) -Xcompiler -fPIC $(if $(filter 1,$(SHOW_WARNINGS)),,-Xcompiler -w)
 CPU_LINK_LIBS := -lm -ldl
 GPU_LINK_LIBS := -lm -ldl $(if $(CUDA_LIB_DIR),-L$(CUDA_LIB_DIR) -Xlinker -rpath -Xlinker $(CUDA_LIB_DIR)) $(if $(wildcard $(CUDA_STUB_DIR)),-L$(CUDA_STUB_DIR)) -lcudart -lcusparse -lcublas -lcufft -lcusolver
+# CUDA releases can share a SONAME but expose different symbols (SpMVOp).
+# On Linux, pin the selected toolkit ahead of an unrelated LD_LIBRARY_PATH.
+# Driver compatibility directories are deliberately not embedded here.
+GPU_LINK_LIBS += -Xlinker --disable-new-dtags
 GPU_RUN_ENV := LD_LIBRARY_PATH=$(CUDA_LIB_DIR)$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
 
 CUDSS_INCLUDE := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field include)
@@ -457,7 +461,8 @@ _require-cudss:
 $(GPU_BUILD_DIR)/gpu-config.json: _gpu-config-force | _require-cudss
 	$(Q)$(PYTHON) scripts/write_gpu_config.py --output "$@" \
 		--cuda "$(CUDA_TOOLKIT_ROOT)" --nvcc "$(CUDA_NVCC)" --arch "$(GPU_SM)" \
-		--cudss_include "$(CUDSS_INCLUDE)" --cudss_library "$(CUDSS_LIBRARY)"
+		--cudss_include "$(CUDSS_INCLUDE)" --cudss_library "$(CUDSS_LIBRARY)" \
+		--link_policy toolkit-rpath-v1
 
 $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -768,6 +773,8 @@ test-entrypoints: $(BUILD_DIR)/test_defaults $(BUILD_DIR)/test_polish_worker_pat
 	$(Q)$(PYTHON) tests/test_cudss_discovery.py
 	$(Q)$(PYTHON) tests/test_cudss_setup.py
 	$(Q)$(PYTHON) tests/test_native_setup.py
+	$(Q)$(PYTHON) tests/test_download_utils.py
+	$(Q)$(PYTHON) tests/test_gpu_runtime_link.py
 
 $(BUILD_DIR)/test_defaults: $(call map_objects,$(BUILD_DIR),tests/test_defaults.c) $(CPU_LIB)
 	$(Q)$(CXX) -o $@ $^ $(CPU_LINK_LIBS)

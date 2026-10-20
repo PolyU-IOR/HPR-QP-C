@@ -8,7 +8,7 @@ import tempfile
 
 p = argparse.ArgumentParser()
 p.add_argument("--output", required=True)
-for key in ("cuda", "nvcc", "arch", "cudss_include", "cudss_library"):
+for key in ("cuda", "nvcc", "arch", "cudss_include", "cudss_library", "link_policy"):
     p.add_argument("--" + key, default="")
 a = p.parse_args()
 config = vars(a).copy()

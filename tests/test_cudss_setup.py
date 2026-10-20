@@ -4,10 +4,12 @@ import io
 from pathlib import Path
 import tarfile
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/setup_cudss.py"
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location("setup_cudss", SCRIPT)
 setup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(setup)

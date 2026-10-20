@@ -11,8 +11,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-import urllib.request
 import zipfile
+from download_utils import open_download
 
 ROOT = Path(__file__).resolve().parents[1]
 CMAKE_NAME = "cmake-3.28.4-py2.py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
@@ -30,7 +30,7 @@ def digest(path, algorithm="sha256"):
 
 
 def download(url, path, expected, algorithm="sha256"):
-    with urllib.request.urlopen(url, timeout=60) as response, Path(path).open("wb") as f:
+    with open_download(url) as response, Path(path).open("wb") as f:
         shutil.copyfileobj(response, f)
     if digest(path, algorithm) != expected:
         raise RuntimeError("Downloaded prerequisite checksum mismatch: " + str(path.name))

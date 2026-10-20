@@ -148,6 +148,10 @@ add_library(hprqp::hprqp ALIAS hprqp)
 target_compile_definitions(hprqp PRIVATE HPRQP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(hprqp PRIVATE ${CMAKE_DL_LIBS})
 if(HPRQP_ENABLE_CUDA)
+    # Use the linked toolkit even if the user's shell contains an older
+    # libcusparse with the same SONAME but without the required SpMVOp API.
+    # Applied to shared libraries and propagated to executable consumers.
+    target_link_options(hprqp PUBLIC "$<$<PLATFORM_ID:Linux>:LINKER:--disable-new-dtags>")
     set(CUDSS_ROOT "" CACHE PATH "cuDSS development installation for equality Gram")
     get_filename_component(HPRQP_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
     get_filename_component(HPRQP_CUDA_ROOT "${HPRQP_CUDA_BIN_DIR}" DIRECTORY)
@@ -509,4 +513,6 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME cudss_discovery COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cudss_discovery.py)
     add_test(NAME cudss_setup COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cudss_setup.py)
     add_test(NAME native_setup COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_setup.py)
+    add_test(NAME download_utils COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_download_utils.py)
+    add_test(NAME gpu_runtime_link COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_runtime_link.py)
 endif()

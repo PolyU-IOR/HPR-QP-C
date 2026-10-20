@@ -7,7 +7,7 @@ A CUDA/C implementation of the Halpern Peaceman--Rachford (HPR) method for solvi
 From the project directory, with a compatible CUDA toolkit and NVIDIA driver:
 
 ```sh
-make
+make && \
 ./build-cuda/solve_qp model.mps --use-gpu 1 --device-number 0 --stoptol 1e-8 --time-limit 1000
 ```
 
@@ -92,6 +92,20 @@ An initial download is about 110–120 MiB. `make AUTO_INSTALL_CUDSS=0` disables
 network installation and fails clearly if the required library is missing.
 CPU-only builds, help, cleaning and capability inspection do not download it.
 `make setup-cudss` remains available to prepare the dependency separately.
+
+Downloads verify HTTPS certificates and archive checksums. The installers use
+the standard system CA bundle even when a custom OpenSSL installation has an
+empty default trust store. Explicit `SSL_CERT_FILE` / `SSL_CERT_DIR` settings
+remain authoritative. If a managed network needs its own CA, ask its
+administrator for the trusted bundle and set `SSL_CERT_FILE` before `make`;
+do not disable certificate verification.
+
+Linux GPU builds embed the selected CUDA/cuDSS library paths with priority over
+conflicting `LD_LIBRARY_PATH` entries. This prevents an older cuSPARSE with the
+same library name from replacing the version used to build SpMVOp support.
+After updating the source, rerun `make`; its build configuration automatically
+invalidates the old link policy. Only launch the solver after `make` succeeds
+(the quick-start `&&` enforces this). A failed build may leave an old executable.
 
 If several CUDA toolkits are installed, use the same `CUDA_ROOT` in both commands:
 

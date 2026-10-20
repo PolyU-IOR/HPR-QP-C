@@ -3,9 +3,11 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 import zipfile
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 spec = importlib.util.spec_from_file_location(
     "native_setup", Path(__file__).resolve().parents[1] / "scripts/setup_native.py")

@@ -14,7 +14,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
-import urllib.request
+from download_utils import open_download
 
 BASE = "https://developer.download.nvidia.com/compute/cudss/redist/"
 MANIFEST_URL = BASE + "redistrib_0.7.1.json"
@@ -29,7 +29,7 @@ SHA256 = {
 
 def download(url, path):
     digest = hashlib.sha256()
-    with urllib.request.urlopen(url, timeout=60) as src, path.open("wb") as dst:
+    with open_download(url) as src, path.open("wb") as dst:
         while True:
             chunk = src.read(1024 * 1024)
             if not chunk:
@@ -107,4 +107,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+        raise SystemExit("cuDSS setup: " + str(error))
