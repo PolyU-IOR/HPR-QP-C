@@ -27,6 +27,7 @@ PYTHON ?= python3
 CUDSS_ROOT ?=
 REQUIRE_CUDSS ?= 1
 AUTO_INSTALL_CUDSS ?= 1
+AUTO_INSTALL_NATIVE_DEPS ?= 1
 CUDA_ROOT ?=
 CUDA_HOME ?=
 CUDA_PATH ?=
@@ -285,6 +286,7 @@ help:
 	  '  make test             Run CPU tests by default, or CPU+GPU tests when CUDA is available' \
 	  '  make install          Install CPU shared artifacts by default, or CPU+GPU shared artifacts when CUDA is available' \
 	  '  make setup-cudss      Download verified cuDSS locally for the selected CUDA toolkit (explicit setup)' \
+	  '  make setup-native     Install missing CMake/BLAS/LAPACK privately for native CPU polishing' \
 	  '  make check-cudss      Verify default GPU Gram build dependency without running a solver' \
 	  '  make clean            Remove default build directories for the current machine' \
 	  '  make build            Build the CPU solver and tests only' \
@@ -332,6 +334,7 @@ help:
 	  '  CUDSS_ROOT=path        Optional override of automatically detected cuDSS' \
 	  '  REQUIRE_CUDSS=0        Explicitly permit a GPU build without equality Gram support' \
 	  '  AUTO_INSTALL_CUDSS=0   Disable automatic cuDSS downloads (missing dependency becomes a build error)' \
+	  '  AUTO_INSTALL_NATIVE_DEPS=0  Disable automatic native dependency downloads' \
 	  '  GPU_SM=arch            Override the detected GPU compute capability (for example: GPU_SM=90)' \
 	  '  V=1                    Show raw compile and link commands' \
 	  '  SHOW_WARNINGS=1        Enable compiler warning output' \
@@ -663,6 +666,8 @@ gpu-install-shared: gpu-build-shared $(GPU_SOLVER_BINARY)
 	cp -R include/. "$(GPU_INSTALL_PREFIX)/include/"
 	@mkdir -p "$(GPU_INSTALL_PREFIX)/libexec/hprqp" "$(GPU_INSTALL_PREFIX)/share/hprqp/licenses"
 	cp "$(NATIVE_BUILD_DIR)/hprqp_polish_worker" "$(GPU_INSTALL_PREFIX)/libexec/hprqp/"
+	@if [ -d "$(NATIVE_BUILD_DIR)/lib" ]; then cp -R "$(NATIVE_BUILD_DIR)/lib" "$(GPU_INSTALL_PREFIX)/libexec/hprqp/"; fi
+	@if [ -d ".deps/native/licenses" ]; then cp -R ".deps/native/licenses" "$(GPU_INSTALL_PREFIX)/share/hprqp/licenses/native-runtime"; fi
 	tar -C third_party -cf - eigen/COPYING.MPL2 nlohmann/LICENSE.MIT pocketfft/LICENSE.md superlu/License.txt SCIPY_LICENSE.txt | tar -C "$(GPU_INSTALL_PREFIX)/share/hprqp/licenses" -xf -
 
 auto-install: _announce-auto-install $(AUTO_INSTALL_TARGETS)
@@ -711,16 +716,18 @@ $(BUILD_DIR)/test_polish_progress: tests/polishing/test_progress.cpp src/shared/
 	$(Q)$(CXX) -std=c++17 -Isrc/shared $< -o $@
 
 .PHONY: test-polishing
-.PHONY: native-polishing
+.PHONY: native-polishing setup-native
+setup-native:
+	$(Q)$(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" --auto-install 1
+
 native-polishing:
-	$(Q)cmake -S polishing/native -B "$(NATIVE_BUILD_DIR)" -DCMAKE_BUILD_TYPE=Release
-	$(Q)cmake --build "$(NATIVE_BUILD_DIR)" --target hprqp_polish_worker --parallel 2
-	@mkdir -p "$(GPU_BUILD_DIR)"
-	$(Q)cmp -s "$(NATIVE_BUILD_DIR)/hprqp_polish_worker" "$(GPU_BUILD_DIR)/hprqp_polish_worker" || cp "$(NATIVE_BUILD_DIR)/hprqp_polish_worker" "$(GPU_BUILD_DIR)/hprqp_polish_worker"
+	$(Q)$(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" \
+		--gpu-dir "$(GPU_BUILD_DIR)" --auto-install "$(AUTO_INSTALL_NATIVE_DEPS)" --build
 
 .PHONY: test-native-polishing
 test-native-polishing: native-polishing
-	$(Q)cmake --build "$(NATIVE_BUILD_DIR)" --target hprqp_polish_inspect --parallel 2
+	$(Q)$(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" \
+		--auto-install "$(AUTO_INSTALL_NATIVE_DEPS)" --build --target hprqp_polish_inspect
 	$(Q)HPRQP_NATIVE_BUILD="$(NATIVE_BUILD_DIR)" PYTHONPATH="$(CURDIR)/polishing:$(PYTHONPATH)" $(PYTHON) tests/polishing/test_native.py
 
 test-polishing: $(BUILD_DIR)/test_polish_progress $(BUILD_DIR)/test_polish_publication $(BUILD_DIR)/test_polish_worker_path
@@ -760,6 +767,7 @@ test-entrypoints: $(BUILD_DIR)/test_defaults $(BUILD_DIR)/test_polish_worker_pat
 	$(Q)$(PYTHON) tests/test_dataset.py
 	$(Q)$(PYTHON) tests/test_cudss_discovery.py
 	$(Q)$(PYTHON) tests/test_cudss_setup.py
+	$(Q)$(PYTHON) tests/test_native_setup.py
 
 $(BUILD_DIR)/test_defaults: $(call map_objects,$(BUILD_DIR),tests/test_defaults.c) $(CPU_LIB)
 	$(Q)$(CXX) -o $@ $^ $(CPU_LINK_LIBS)

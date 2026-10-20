@@ -5,12 +5,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
 endif()
 get_filename_component(HPRQP_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(HPRQP_NATIVE_ROOT "${HPRQP_SOURCE_ROOT}/.deps/native" CACHE PATH
+    "Private BLAS/LAPACK dependencies installed by make")
 # Runtime libraries suffice; development symlinks are not present everywhere.
-find_library(HPRQP_BLAS NAMES blas libblas.so.3 openblas)
-find_library(HPRQP_LAPACK NAMES lapack liblapack.so.3)
+find_library(HPRQP_BLAS NAMES blas libblas.so.3 openblas HINTS "${HPRQP_NATIVE_ROOT}/lib")
+find_library(HPRQP_LAPACK NAMES lapack liblapack.so.3 HINTS "${HPRQP_NATIVE_ROOT}/lib")
 find_library(HPRQP_CRYPTO NAMES libcrypto.so.3 libcrypto.so.1.1)
 if(NOT HPRQP_BLAS OR NOT HPRQP_LAPACK)
-  message(FATAL_ERROR "Native CPU polishing requires BLAS and LAPACK (for example libblas-dev liblapack-dev on Debian/Ubuntu).")
+  message(FATAL_ERROR "HPRQP_NATIVE_BLAS_LAPACK_MISSING: Native CPU polishing requires BLAS and LAPACK. Run make setup-native for automatic local setup, or install libblas-dev/liblapack-dev.")
 endif()
 if(NOT HPRQP_CRYPTO)
   message(FATAL_ERROR "Native polishing publication requires OpenSSL libcrypto.so.3 or libcrypto.so.1.1.")
@@ -36,3 +38,18 @@ target_link_libraries(hprqp_polish_worker PRIVATE hprqp_native_polish ${CMAKE_DL
 add_executable(hprqp_polish_inspect EXCLUDE_FROM_ALL
   "${HPRQP_SOURCE_ROOT}/tests/polishing/native_inspect.cpp")
 target_link_libraries(hprqp_polish_inspect PRIVATE hprqp_native_polish)
+
+if(EXISTS "${HPRQP_NATIVE_ROOT}/lib")
+  # Keep the worker relocatable without requiring an LD_LIBRARY_PATH override.
+  # DT_RPATH is intentional: LAPACK's Fortran dependency is transitive.
+  file(COPY "${HPRQP_NATIVE_ROOT}/lib/" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/lib")
+  foreach(worker hprqp_polish_worker hprqp_polish_inspect)
+    target_link_options(${worker} PRIVATE "LINKER:--disable-new-dtags")
+    set_target_properties(${worker} PROPERTIES
+      BUILD_RPATH "$ORIGIN/lib;${HPRQP_NATIVE_ROOT}/lib"
+      INSTALL_RPATH "$ORIGIN/lib")
+    add_custom_command(TARGET ${worker} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory
+              "${HPRQP_NATIVE_ROOT}/lib" "$<TARGET_FILE_DIR:${worker}>/lib")
+  endforeach()
+endif()

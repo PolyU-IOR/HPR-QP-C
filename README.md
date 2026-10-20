@@ -41,15 +41,31 @@ python3 scripts/run_dataset.py /path/to/mps /path/to/results
 
 ## Install
 
-For a fresh setup, provide a C/C++ compiler, CMake 3.16+, BLAS/LAPACK runtime
-libraries and OpenSSL `libcrypto` (3 or 1.1). Python 3 is used by build helpers and
-the optional dataset script, not by polishing. On Debian/Ubuntu, the usual build
-packages are `build-essential cmake libblas-dev liblapack-dev libssl-dev python3`.
+For a fresh setup, provide a C/C++ compiler, Python 3 and OpenSSL `libcrypto`
+(3 or 1.1). Python is used by build helpers and the optional dataset script,
+not by polishing. On Debian/Ubuntu Linux x86_64, `make` also installs missing
+CMake and BLAS/LAPACK prerequisites into this checkout automatically.
 With a compatible CUDA toolkit and driver installed:
 
 ```sh
 make
 ```
+
+For native CPU polishing, `make` first reuses working CMake and BLAS/LAPACK
+installations. If missing, it downloads checksum-verified CMake 3.28.4 and/or
+extracts the distribution's BLAS/LAPACK and Fortran runtime packages under
+`.deps/`. Package versions and hashes come from the configured APT repository
+metadata. This requires `apt-get`/`dpkg-deb` with usable package indexes for the
+native libraries. It does not run `sudo`, execute package installation scripts,
+or modify system packages. `make setup-native` can prepare this explicitly.
+`AUTO_INSTALL_NATIVE_DEPS=0` disables these downloads and reports missing
+dependencies. On other platforms, install CMake 3.16+ and BLAS/LAPACK manually.
+
+The native worker finds its private runtime libraries automatically; no
+`LD_LIBRARY_PATH` setting is needed for these libraries. If you previously saw
+“Native CPU polishing requires BLAS and LAPACK”, use this updated source and
+run `make` again; the failed configuration is repaired without changing solver
+settings.
 
 On a GPU build, `make` reuses a compatible cuDSS installation or automatically
 downloads the benchmark-qualified NVIDIA cuDSS
@@ -70,6 +86,19 @@ make CUDA_ROOT=/usr/local/cuda-13.3
 make check-cudss CUDA_ROOT=/usr/local/cuda-13.3
 ```
 
+The selected toolkit also needs a compatible NVIDIA driver. On a server where
+an administrator has installed CUDA's forward-compatibility libraries for a
+supported GPU, enable that installation before running the solver, for example:
+
+```sh
+export LD_LIBRARY_PATH=/usr/local/cuda-13.3/compat${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+```
+
+This applies to the CUDA driver, not to the private BLAS/LAPACK libraries.
+If no compatible driver/compatibility package is available, choose a toolkit
+supported by the installed driver (for example `make CUDA_ROOT=/usr/local/cuda-12.8`)
+or ask the administrator to update the driver. `make` never modifies drivers.
+
 Already have cuDSS? Use `make CUDSS_ROOT=/path/to/cudss`;
 that directory must contain `include/cudss.h` and its matching shared library.
 The build also detects NVIDIA wheels, including `libcudss.so.0` without a symlink.
@@ -84,7 +113,8 @@ experiments. CMake has the corresponding `HPRQP_REQUIRE_CUDSS=OFF` opt-out.
 CPU-only builds (`make cpu`) do not require cuDSS.
 
 The native worker is built and placed beside `build-cuda/solve_qp`.
-Keep `hprqp_polish_worker` with the executable when copying a build.
+Keep `hprqp_polish_worker` and its `lib/` directory (when present) with the
+executable when copying a build.
 `make install` installs the worker under `libexec/hprqp`.
 Eigen, SuperLU, pocketfft and the JSON parser sources are vendored with their
 licenses. The retained Python worker and `polishing/requirements.txt` serve

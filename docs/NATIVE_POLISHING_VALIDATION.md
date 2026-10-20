@@ -70,3 +70,24 @@ an explicit test/reference option. Changing BLAS, LAPACK or factorization
 versions can change rounding and trajectories; the port preserves the common
 equations and acceptance rules rather than promising byte-identical successful
 polishing trajectories across libraries.
+
+## Automatic native prerequisite delivery
+
+The follow-up installation repair was tested on Ubuntu 22.04 server dantzig
+without system CMake or BLAS/LAPACK. Plain `make` installed checksum-verified
+CMake 3.28.4 and the distribution's native runtime libraries locally, then
+built the solver and worker. All numerical source files remained unchanged.
+Seven installer contract tests cover reuse, offline behavior, checksum and
+archive rejection, and distinguishing missing libraries from unrelated errors.
+
+The worker resolves every private BLAS/LAPACK/Fortran dependency after copying
+it and its `lib/` directory to a new location, without a native library
+environment override. A second build with both automatic downloads disabled
+succeeds and leaves the worker binary unchanged. Public dataset small QP/QCQP
+checks pass at native `1e-8`. These are installation checks, not a new corpus
+performance result.
+
+On this host, CUDA 13.3 requires its already-installed compatibility driver
+path; without it, both initial smoke checks returned before any iteration.
+Those initialization failures are preserved separately from the successful
+checks using the compatible runtime. No driver or system package was modified.

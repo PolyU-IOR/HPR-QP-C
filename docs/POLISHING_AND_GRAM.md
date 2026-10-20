@@ -14,7 +14,11 @@ Recompile clients:
 
 Linux, a 64-bit little-endian host, C++17 and CUDA are required for live GPU
 polishing. The default worker is a native executable linked to BLAS/LAPACK.
-Building it requires CMake 3.16+. The worker and owner use OpenSSL's
+Building it requires CMake 3.16+. On Debian/Ubuntu Linux x86_64, default Make
+reuses these dependencies or installs missing CMake and BLAS/LAPACK privately;
+`AUTO_INSTALL_NATIVE_DEPS=0` disables downloading. Private runtime libraries
+travel in the worker's adjacent `lib/` directory, including on installation.
+The worker and owner use OpenSSL's
 `libcrypto.so.3` or `libcrypto.so.1.1` for payload verification. Gram additionally
 needs cuDSS. Python 3 serves build helpers and the dataset script; NumPy/SciPy
 are needed only for optional reference tests, not for runtime polishing.
