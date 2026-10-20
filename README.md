@@ -2,6 +2,20 @@
 
 A CUDA/C implementation of the Halpern Peaceman--Rachford (HPR) method for solving quadratic programming (QP) problems on GPUs.
 
+## Quick start
+
+From the project directory, with a compatible CUDA toolkit and NVIDIA driver:
+
+```sh
+make
+./build-cuda/solve_qp model.mps --use-gpu 1 --device-number 0 --stoptol 1e-8 --time-limit 1000
+```
+
+Replace `model.mps` with your input file and `0` with the desired GPU index.
+The command explicitly launches the GPU executable. Native CPU polishing,
+automatic Gram selection and supported GPU optimizations are enabled by default.
+See [Install](#install) below for prerequisites and dependency setup.
+
 This branch packages the validated updates as a single commit on GitHub `main`.
 See the [clean release scope](docs/CLEAN_RELEASE_SCOPE.md) and
 [qualification record](docs/INTEGRATION_VALIDATION.md).
