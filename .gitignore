@@ -65,3 +65,4 @@ results/
 # Local progress tracking
 /IMPLEMENTATION_STATUS.md
 /build-*/
+/.deps/

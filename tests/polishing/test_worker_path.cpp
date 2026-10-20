@@ -9,8 +9,8 @@ int main() {
     auto dir=mkdtemp(pattern);
     if (!dir) return 1;
     fs::path root=dir, source=root/"checkout", prefix=root/"moved";
-    auto put=[](const fs::path& p) {fs::create_directories(p.parent_path());std::ofstream(p)<<"# test\n";};
-    auto src=source/"polishing/worker.py", installed=prefix/"share/hprqp/polishing/worker.py";
+    auto put=[](const fs::path& p) {fs::create_directories(p.parent_path());std::ofstream(p)<<"# test\n";fs::permissions(p,fs::perms::owner_exec,fs::perm_options::add);};
+    auto src=source/"build-native-polish/hprqp_polish_worker", installed=prefix/"libexec/hprqp/hprqp_polish_worker";
     put(src);put(installed);
     int failures=0;
     auto require=[&](bool value) {if (!value) ++failures;};
@@ -19,6 +19,11 @@ int main() {
     require(worker_path(nullptr,{prefix/"lib/libhprqp.so"},source)==installed.string());
     require(worker_path(nullptr,{prefix/"lib/x86_64-linux-gnu/libhprqp.so"},source)==installed.string());
     require(worker_path(src.c_str(),{prefix/"bin/solve_qp"},source)==src.string());
+    auto adjacent=prefix/"bin/hprqp_polish_worker";put(adjacent);
+    require(worker_path(nullptr,{prefix/"bin/solve_qp"},source)==adjacent.string());
+    fs::remove(adjacent);
+    fs::permissions(installed,fs::perms::owner_exec,fs::perm_options::remove);
+    require(worker_path(nullptr,{prefix/"bin/solve_qp"},source)==src.string());
     fs::remove(installed);
     require(worker_path(nullptr,{root/"build/solve_qp"},source)==src.string());
     try {worker_path("/not/a/worker",{},source);++failures;} catch(const std::runtime_error&) {}

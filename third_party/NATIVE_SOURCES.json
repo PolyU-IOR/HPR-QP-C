@@ -1,0 +1,56 @@
+[
+  {
+    "name": "eigen-3.4.0.tar.gz",
+    "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+    "size": 2705005,
+    "sha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72"
+  },
+  {
+    "name": "json.hpp",
+    "url": "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp",
+    "size": 919975,
+    "sha256": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6"
+  },
+  {
+    "name": "JSON_LICENSE.MIT",
+    "url": "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/LICENSE.MIT",
+    "size": 1076,
+    "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+  },
+  {
+    "name": "pocketfft_commit.json",
+    "url": "https://api.github.com/repos/mreineck/pocketfft/commits/cpp",
+    "size": 17099,
+    "sha256": "d15fe0e1cec2bbf21830919a43f34b9f4cc6372b10743272fd39d20ce89a1bac"
+  },
+  {
+    "name": "pocketfft_hdronly.h",
+    "url": "https://raw.githubusercontent.com/mreineck/pocketfft/4d865cba24359b05b37da4e75aee24498c3b78e7/pocketfft_hdronly.h",
+    "size": 121769,
+    "sha256": "518a95c552aeaee352aa30122137cd9e135d23c91e2863d9272aaa758744c86d"
+  },
+  {
+    "name": "POCKETFFT_LICENSE.md",
+    "url": "https://raw.githubusercontent.com/mreineck/pocketfft/4d865cba24359b05b37da4e75aee24498c3b78e7/LICENSE.md",
+    "size": 1498,
+    "sha256": "a85ca13fdf90160b64a0698215868c13b74d835ad0a4e2ba44713b8c5058a056"
+  },
+  {
+    "name": "superlu-7.0.0.tar.gz",
+    "url": "https://codeload.github.com/xiaoyeli/superlu/tar.gz/refs/tags/v7.0.0",
+    "size": 2512366,
+    "sha256": "d7b91d4e0bb52644ca74c1a4dd466a694ddf1244a7bbf93cb453e8ca1f6527eb"
+  },
+  {
+    "name": "scipy_minres.py",
+    "url": "https://raw.githubusercontent.com/scipy/scipy/v1.16.2/scipy/sparse/linalg/_isolve/minres.py",
+    "size": 10862,
+    "sha256": "6a44a825814f1399e8dd73d9ae4229758f031152ca75ff170a698dffacdc7821"
+  },
+  {
+    "name": "SCIPY_LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/scipy/scipy/v1.16.2/LICENSE.txt",
+    "size": 1531,
+    "sha256": "221e59f5e910fd7f94e44f0dac77436a11338c285c6346232e4a850a50da0e94"
+  }
+]

@@ -1,3 +1,4 @@
+#include "shared/diagnostics.h"
 #include "internal/hprqp_internal.h"
 #include "gram_policy.h"
 #include "gpu/row_metric.h"
@@ -147,7 +148,7 @@ HPRQPStatus solve_gpu(const HPRQPModel *model, const HPRQPParams *params, HPRQPR
     if (params->gram_mode == HPRQP_GRAM_AUTO) {
         int matched = hprqp_gram_auto_eligible(model);
         selected_params.gram_mode = matched ? HPRQP_GRAM_REQUEST : HPRQP_GRAM_OFF;
-        if (params->verbose) fprintf(stderr, "GRAM_AUTO %s\n", matched ? "spatial_structure" : "declined_structure");
+        if (params->verbose) hprqp_diagnostic("GRAM_AUTO %s\n", matched ? "spatial_structure" : "declined_structure");
     }
     params = &selected_params;
     scaling_init(&scaling);

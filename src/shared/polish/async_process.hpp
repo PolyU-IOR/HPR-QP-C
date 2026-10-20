@@ -42,8 +42,25 @@ public:
         if(!rc)rc=posix_spawnattr_setflags(&attrs,POSIX_SPAWN_SETPGROUP);
         if(!rc)rc=posix_spawnattr_setpgroup(&attrs,0); // child owns its process group
         std::vector<char*> argv;for(const auto& a:args)argv.push_back(const_cast<char*>(a.c_str()));argv.push_back(nullptr);
+        // Set thread limits before the native loader initializes BLAS. Keep the
+        // GPU owner's environment unchanged.
+        std::vector<std::string> child_env;
+        const std::vector<std::string> thread_names = {
+            "OPENBLAS_NUM_THREADS=", "OMP_NUM_THREADS=", "MKL_NUM_THREADS=",
+            "BLIS_NUM_THREADS=", "VECLIB_MAXIMUM_THREADS="};
+        for (char** p = environ; p && *p; ++p) {
+            std::string entry(*p);
+            bool thread_setting = false;
+            for (const auto& name : thread_names)
+                if (entry.compare(0, name.size(), name) == 0) thread_setting = true;
+            if (!thread_setting) child_env.push_back(std::move(entry));
+        }
+        for (const auto& name : thread_names) child_env.push_back(name + "1");
+        std::vector<char*> envp;
+        for (auto& entry : child_env) envp.push_back(entry.data());
+        envp.push_back(nullptr);
         started_=std::chrono::steady_clock::now();budget_=seconds;
-        if(!rc)rc=posix_spawnp(&pid_,argv[0],&actions,&attrs,argv.data(),environ);
+        if(!rc)rc=posix_spawnp(&pid_,argv[0],&actions,&attrs,argv.data(),envp.data());
         cleanup();
         if(rc){pid_=-1;state=IDLE;throw std::runtime_error("posix_spawn error "+std::to_string(rc));}
         state=RUNNING;exit_code=-1;

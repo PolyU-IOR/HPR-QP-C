@@ -46,8 +46,10 @@ No partial point, multiplier, penalty or control state returns to the GPU.
 Only an independently certified terminal result can replace the returned host
 solution. Resource, growth and equation failures leave HPR running.
 
-The live path is `worker.py -> common_correction.episode.polish_common ->
-precision_driver.run`. Older helper modules are retained as dependencies or
-historical reference; the live dispatcher does not select the old per-family
-portfolio. Equality Gram is an independent GPU row metric, as described in
+The default live path is the native `hprqp_polish_worker` executable:
+`polishing/native/worker.cpp -> episode.cpp`. `system.cpp` defines the common
+equations, `checker.cpp` independently certifies the serialized candidate, and
+`access.cpp`/`spatial.cpp` provide equivalent linear-algebra access. The retained
+Python implementation is a test oracle and an explicit override only; the live
+dispatcher does not select the old per-family portfolio. Equality Gram is an independent GPU row metric, as described in
 [equality_gram_scaling.tex](equality_gram_scaling.tex).

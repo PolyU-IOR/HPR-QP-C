@@ -1,3 +1,4 @@
+#include "shared/diagnostics.h"
 // S698: exact equality Gram access, independent of primal box/contact masks.
 #include <cufft.h>
 #include <cusolverDn.h>
@@ -10,8 +11,8 @@ struct SpatialGram {
  double *real=nullptr,*r=nullptr,*di=nullptr,*tmp=nullptr,*t=nullptr,*u=nullptr,*weight=nullptr,*schur=nullptr,*z=nullptr,*factor_work=nullptr;
  cufftDoubleComplex *freq=nullptr;int *idx=nullptr,*info=nullptr;
 };
-#define SG_FFT(x) do{auto e=(x);if(e!=CUFFT_SUCCESS){std::fprintf(stderr,"S698_FFT_ERROR line=%d status=%d\n",__LINE__,int(e));return HPRQP_STATUS_NOT_IMPLEMENTED;}}while(0)
-#define SG_DENSE(x) do{auto e=(x);if(e!=CUSOLVER_STATUS_SUCCESS){std::fprintf(stderr,"S698_DENSE_ERROR line=%d status=%d\n",__LINE__,int(e));return HPRQP_STATUS_NOT_IMPLEMENTED;}}while(0)
+#define SG_FFT(x) do{auto e=(x);if(e!=CUFFT_SUCCESS){hprqp_diagnostic("S698_FFT_ERROR line=%d status=%d\n",__LINE__,int(e));return HPRQP_STATUS_NOT_IMPLEMENTED;}}while(0)
+#define SG_DENSE(x) do{auto e=(x);if(e!=CUSOLVER_STATUS_SUCCESS){hprqp_diagnostic("S698_DENSE_ERROR line=%d status=%d\n",__LINE__,int(e));return HPRQP_STATUS_NOT_IMPLEMENTED;}}while(0)
 static void sg_free(SpatialGram*s){if(!s)return;cudaDeviceSynchronize();if(s->forward)cufftDestroy(s->forward);if(s->backward)cufftDestroy(s->backward);if(s->dense)cusolverDnDestroy(s->dense);for(auto p:{s->real,s->r,s->di,s->tmp,s->t,s->u,s->weight,s->schur,s->z,s->factor_work})cudaFree(p);cudaFree(s->freq);cudaFree(s->idx);cudaFree(s->info);delete s;}
 __global__ static void sg_extend(const double*x,double*out,int N,int L){int z=blockIdx.x*blockDim.x+threadIdx.x;if(z>=L*L)return;int i=z/L,j=z%L;if(i==0||j==0||i==N+1||j==N+1){out[z]=0;return;}int a=i<=N?i-1:L-i-1,b=j<=N?j-1:L-j-1;out[z]=((i<=N)==(j<=N)?1.:-1.)*x[a*N+b];}
 __global__ static void sg_spectrum(cufftDoubleComplex*x,int N,int L){int z=blockIdx.x*blockDim.x+threadIdx.x;int width=L/2+1;if(z>=L*width)return;int i=z/width,j=z%width;if(i==0||j==0||i==N+1||j==N+1){x[z].x=0;x[z].y=0;return;}double a=sin(3.14159265358979323846*i/L),b=sin(3.14159265358979323846*j/L),d=4*(a*a+b*b);x[z].x/=d;x[z].y/=d;}
@@ -66,8 +67,8 @@ static HPRQPStatus sg_setup(RowMetric*c,const std::vector<int>&ar,const std::vec
  RM_CUDA(cudaMalloc(&s->schur,(size_t)s->k*s->k*sizeof(double)));RM_CUDA(cudaMalloc(&s->z,s->k*sizeof(double)));RM_CUDA(cudaMalloc(&s->info,sizeof(int)));
  SG_FFT(cufftPlan2d(&s->forward,s->L,s->L,CUFFT_D2Z));SG_FFT(cufftPlan2d(&s->backward,s->L,s->L,CUFFT_Z2D));SG_DENSE(cusolverDnCreate(&s->dense));
  for(int j=0;j<s->k;j++){RM_CUDA(cudaMemset(s->u,0,m*sizeof(double)));sg_unit<<<1,1>>>(s->u,s->idx,s->weight,j);RM_TRY(sg_Hinv(s,s->u,s->t));sg_gather<<<(s->k+255)/256,256>>>(s->t,s->idx,s->weight,s->schur+(size_t)j*s->k,s->k,j);}
- int lwork=0;SG_DENSE(cusolverDnDpotrf_bufferSize(s->dense,CUBLAS_FILL_MODE_LOWER,s->k,s->schur,s->k,&lwork));RM_CUDA(cudaMalloc(&s->factor_work,lwork*sizeof(double)));SG_DENSE(cusolverDnDpotrf(s->dense,CUBLAS_FILL_MODE_LOWER,s->k,s->schur,s->k,s->factor_work,lwork,s->info));int info=-1;RM_CUDA(cudaMemcpy(&info,s->info,sizeof(int),cudaMemcpyDeviceToHost));if(info!=0){std::fprintf(stderr,"S698_FACTOR_FAILURE info=%d\n",info);return HPRQP_STATUS_NOT_IMPLEMENTED;}
- s->setup_s=now()-tick;std::fprintf(stderr,"S698_STRUCTURE_READY N=%d rank=%d defect=%.17g setup_s=%.9g\n",N,s->k,s->structure_defect,s->setup_s);return HPRQP_STATUS_OK;
+ int lwork=0;SG_DENSE(cusolverDnDpotrf_bufferSize(s->dense,CUBLAS_FILL_MODE_LOWER,s->k,s->schur,s->k,&lwork));RM_CUDA(cudaMalloc(&s->factor_work,lwork*sizeof(double)));SG_DENSE(cusolverDnDpotrf(s->dense,CUBLAS_FILL_MODE_LOWER,s->k,s->schur,s->k,s->factor_work,lwork,s->info));int info=-1;RM_CUDA(cudaMemcpy(&info,s->info,sizeof(int),cudaMemcpyDeviceToHost));if(info!=0){hprqp_diagnostic("S698_FACTOR_FAILURE info=%d\n",info);return HPRQP_STATUS_NOT_IMPLEMENTED;}
+ s->setup_s=now()-tick;hprqp_diagnostic("S698_STRUCTURE_READY N=%d rank=%d defect=%.17g setup_s=%.9g\n",N,s->k,s->structure_defect,s->setup_s);return HPRQP_STATUS_OK;
 }
 static HPRQPStatus sg_validate_profile(RowMetric*c,const std::vector<int>&rp,const std::vector<int>&ci,const std::vector<double>&val){
  auto*s=c->spatial;int m=c->l;std::vector<double>b(m),x(m),direct(m),known(m);double an=0;for(int i=0;i<m;i++){double a=0;for(int j=rp[i];j<rp[i+1];j++)a+=std::fabs(val[j]);an=std::max(an,a);}
@@ -85,5 +86,5 @@ static HPRQPStatus sg_validate_profile(RowMetric*c,const std::vector<int>&rp,con
  // Reporting is optional and cannot decide numerical activation.
  const char*out=std::getenv("HPRQP_SPATIAL_GRAM_REPORT");if(out){std::ofstream f(out);f<<std::setprecision(17)<<"{\"passed\":"<<(passed?"true":"false")<<",\"N\":"<<s->N<<",\"rank\":"<<s->k<<",\"structure_defect\":"<<s->structure_defect<<",\"setup_s\":"<<s->setup_s<<",\"max_backward\":"<<worstback<<",\"max_rhs_relative\":"<<worstrhs<<",\"max_direct_relative\":"<<worstdiff<<",\"manufactured_forward\":"<<worstforward<<",\"rhs_checks\":4,\"batch_actions\":32,\"batches\":[";
  for(size_t i=0;i<wall.size();i++){if(i)f<<",";f<<"{\"spatial\":"<<(arms[i]?"true":"false")<<",\"wall_s\":"<<wall[i]<<",\"device_s\":"<<device[i]<<"}";}f<<"]}\n";f.close();if(!f)std::fprintf(stderr,"HPRQP_SPATIAL_GRAM_REPORT warning: cannot write diagnostic report\n");}
- std::fprintf(stderr,"S698_ACCURACY passed=%d backward=%.9g rhs=%.9g direct=%.9g forward=%.9g\n",passed,worstback,worstrhs,worstdiff,worstforward);return passed?HPRQP_STATUS_OK:HPRQP_STATUS_NOT_IMPLEMENTED;
+ hprqp_diagnostic("S698_ACCURACY passed=%d backward=%.9g rhs=%.9g direct=%.9g forward=%.9g\n",passed,worstback,worstrhs,worstdiff,worstforward);return passed?HPRQP_STATUS_OK:HPRQP_STATUS_NOT_IMPLEMENTED;
 }

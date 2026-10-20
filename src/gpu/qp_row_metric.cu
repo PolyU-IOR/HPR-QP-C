@@ -1,3 +1,4 @@
+#include "shared/diagnostics.h"
 #ifndef HPRQP_HAVE_CUDSS
 #define HPRQP_HAVE_CUDSS 0
 #endif
@@ -22,14 +23,14 @@ struct QPMetric {
 };
 static double qp_now(){return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 #define QP_CUDA(x) do{cudaError_t z=(x);if(z!=cudaSuccess){c->reason="cuda_setup_failure";c->fatal=(z!=cudaErrorMemoryAllocation);return map_cuda_status(z);}}while(0)
-#define QP_DSS(x) do{cudssStatus_t z=(x);if(z!=CUDSS_STATUS_SUCCESS){c->reason="factor_or_solve_rejected";std::fprintf(stderr,"QP_GRAM_CUDSS_ERROR line=%d status=%d\n",__LINE__,int(z));return HPRQP_STATUS_NOT_IMPLEMENTED;}}while(0)
+#define QP_DSS(x) do{cudssStatus_t z=(x);if(z!=CUDSS_STATUS_SUCCESS){c->reason="factor_or_solve_rejected";hprqp_diagnostic("QP_GRAM_CUDSS_ERROR line=%d status=%d\n",__LINE__,int(z));return HPRQP_STATUS_NOT_IMPLEMENTED;}}while(0)
 static bool qp_trace(const QPMetric*c){return c->n<=128&&std::getenv("HPRQP_GRAM_TRACE");}
 static void qp_vec(const char*name,const double*v,size_t n){std::vector<double>a(n);if(n)cudaMemcpy(a.data(),v,n*sizeof(double),cudaMemcpyDeviceToHost);std::fprintf(stderr,",\"%s\":[",name);for(size_t i=0;i<n;i++)std::fprintf(stderr,"%s%.17g",i?",":"",a[i]);std::fprintf(stderr,"]");}
 static void qp_host(const char*name,const std::vector<double>&v){std::fprintf(stderr,",\"%s\":[",name);for(size_t i=0;i<v.size();i++){if(i)std::fprintf(stderr,",");if(std::isfinite(v[i]))std::fprintf(stderr,"%.17g",v[i]);else std::fprintf(stderr,"null");}std::fprintf(stderr,"]");}
 int gpu_qp_metric_enabled(const HPRQPGPUWorkspace*w){auto*c=(QPMetric*)w->qp_row_metric_ctx;return c&&c->ready;}
 void gpu_qp_metric_free(HPRQPGPUWorkspace*w){
     auto*c=(QPMetric*)w->qp_row_metric_ctx;if(!c)return;
-    if(c->ready)std::fprintf(stderr,"QP_GRAM_COST setup_s=%.9g factor_s=%.9g iterations=%zu quadratics=%zu equality_rows=%d gram_nnz=%zu beta=%.17g backward=%.17g rhs_relative=%.17g\n",c->setup_s,c->factor_s,c->calls,c->quadratics,c->e,c->nnz,c->beta,c->backward,c->relative);
+    if(c->ready)hprqp_diagnostic("QP_GRAM_COST setup_s=%.9g factor_s=%.9g iterations=%zu quadratics=%zu equality_rows=%d gram_nnz=%zu beta=%.17g backward=%.17g rhs_relative=%.17g\n",c->setup_s,c->factor_s,c->calls,c->quadratics,c->e,c->nnz,c->beta,c->backward,c->relative);
     if(c->matrix)cudssMatrixDestroy(c->matrix);if(c->rin)cudssMatrixDestroy(c->rin);if(c->sout)cudssMatrixDestroy(c->sout);
     if(c->data)cudssDataDestroy(c->handle,c->data);if(c->config)cudssConfigDestroy(c->config);if(c->handle)cudssDestroy(c->handle);
     for(double*p:{c->val,c->tv,c->rhs,c->sol,c->tmp,c->rest,c->b})if(p)cudaFree(p);
@@ -114,7 +115,7 @@ static HPRQPStatus qp_build(HPRQPGPUWorkspace*w,const HPRQPGPUProblem*p,QPMetric
     HPRQPStatus bs=map_cublas_status(cublasDnrm2((cublasHandle_t)w->blas_handle,n,p->c.values,1,&normc));if(bs!=HPRQP_STATUS_OK)return bs;
     double sigma=(normb>1e-16&&normc>1e-16&&normb<1e16&&normc<1e16)?normb/normc:1.;
     c->setup_s=qp_now()-tick;c->ready=true;w->sigma=sigma;w->lambda_max_A=2*c->beta;w->noC=0;
-    std::fprintf(stderr,"QP_GRAM_READY equality_rows=%d other_rows=%d n=%d gram_nnz=%zu beta=%.17g sigma=%.17g setup_s=%.9g factor_s=%.9g backward=%.17g rhs_relative=%.17g\n",e,m-e,n,c->nnz,c->beta,sigma,c->setup_s,c->factor_s,c->backward,c->relative);
+    hprqp_diagnostic("QP_GRAM_READY equality_rows=%d other_rows=%d n=%d gram_nnz=%zu beta=%.17g sigma=%.17g setup_s=%.9g factor_s=%.9g backward=%.17g rhs_relative=%.17g\n",e,m-e,n,c->nnz,c->beta,sigma,c->setup_s,c->factor_s,c->backward,c->relative);
     if(qp_trace(c)){
         std::fprintf(stderr,"HPRQP_GRAM_TRACE {\"stage\":\"setup\",\"e\":%d,\"n\":%d,\"m\":%d,\"beta\":%.17g,\"sigma\":%.17g,\"eq\":[",e,n,m,c->beta,sigma);
         for(int i=0;i<e;i++)std::fprintf(stderr,"%s%d",i?",":"",eq[i]);std::fprintf(stderr,"],\"gram\":[");
@@ -125,11 +126,11 @@ static HPRQPStatus qp_build(HPRQPGPUWorkspace*w,const HPRQPGPUProblem*p,QPMetric
 HPRQPStatus gpu_qp_metric_setup(HPRQPGPUWorkspace*w,const HPRQPGPUProblem*p,const HPRQPParams*params){
     if(params->gram_mode==HPRQP_GRAM_OFF)return HPRQP_STATUS_OK;
     if(p->num_row_cones||p->num_var_cones)return HPRQP_STATUS_OK;
-    if(!w->m||!w->n||w->empty_A){std::fprintf(stderr,"QP_GRAM_SKIP reason=no_equalities\n");return HPRQP_STATUS_OK;}
-    double tick=qp_now();auto*c=new(std::nothrow) QPMetric;if(!c){std::fprintf(stderr,"QP_GRAM_SKIP reason=host_allocation\n");return HPRQP_STATUS_OK;}
+    if(!w->m||!w->n||w->empty_A){hprqp_diagnostic("QP_GRAM_SKIP reason=no_equalities\n");return HPRQP_STATUS_OK;}
+    double tick=qp_now();auto*c=new(std::nothrow) QPMetric;if(!c){hprqp_diagnostic("QP_GRAM_SKIP reason=host_allocation\n");return HPRQP_STATUS_OK;}
     w->qp_row_metric_ctx=c;HPRQPStatus status;
     try{status=qp_build(w,p,c);}catch(const std::bad_alloc&){c->reason="host_allocation";status=HPRQP_STATUS_ALLOCATION_FAILED;}
-    if(status!=HPRQP_STATUS_OK){std::fprintf(stderr,"QP_GRAM_SKIP reason=%s setup_s=%.9g status=%d\n",c->reason,qp_now()-tick,int(status));bool fatal=c->fatal;gpu_qp_metric_free(w);cudaGetLastError();if(fatal)return status;}
+    if(status!=HPRQP_STATUS_OK){hprqp_diagnostic("QP_GRAM_SKIP reason=%s setup_s=%.9g status=%d\n",c->reason,qp_now()-tick,int(status));bool fatal=c->fatal;gpu_qp_metric_free(w);cudaGetLastError();if(fatal)return status;}
     return HPRQP_STATUS_OK;
 }
 
@@ -140,7 +141,7 @@ int gpu_qp_metric_enabled(const HPRQPGPUWorkspace*){return 0;}
 void gpu_qp_metric_free(HPRQPGPUWorkspace*){}
 HPRQPStatus gpu_qp_metric_setup(HPRQPGPUWorkspace*,const HPRQPGPUProblem*p,const HPRQPParams*params){
     if(params->gram_mode!=HPRQP_GRAM_OFF && !p->num_row_cones)
-        std::fprintf(stderr,"GRAM_SKIP reason=cudss_not_built\n");
+        hprqp_diagnostic("GRAM_SKIP reason=cudss_not_built\n");
     return HPRQP_STATUS_OK;
 }
 HPRQPStatus gpu_qp_metric_finish_y(HPRQPGPUWorkspace*,double,double){return HPRQP_STATUS_NOT_IMPLEMENTED;}

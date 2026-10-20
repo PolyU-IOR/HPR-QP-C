@@ -2,10 +2,12 @@
 
 import argparse
 import csv
+import json
 import math
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +17,10 @@ CSV_NAME = "HPRQP_result.csv"
 LOG_NAME = "HPRQP_log.txt"
 SUMMARY_NAMES = {"SGM10", "solved"}
 INPUT_FORMAT = "mps_qcmatrix_v1"
-COMPLETED_STATUSES = {"OPTIMAL", "OK", "MAX_ITER", "TIME_LIMIT"}
+SOLVED_STATUSES = {"OPTIMAL", "polished_optimal"}
+COMPLETED_STATUSES = SOLVED_STATUSES | {"OK", "MAX_ITER", "TIME_LIMIT"}
+METADATA_FIELDS = ("input_format", "row_cones", "total_time", "gram_active",
+                   "polish_attempts", "polish_accepted")
 FIELDNAMES = [
     "name",
     "iter",
@@ -178,7 +183,7 @@ def write_csv(csv_path: Path, rows: list[dict[str, str]], time_limit: float) -> 
     solved_row = {
         "name": "solved",
         "iter": "",
-        "alg_time": str(sum(row.get("status") == "OPTIMAL" for row in data_rows)),
+        "alg_time": str(sum(row.get("status") in SOLVED_STATUSES for row in data_rows)),
         "res": "",
         "primal_obj": "",
         "gap": "",
@@ -191,7 +196,7 @@ def write_csv(csv_path: Path, rows: list[dict[str, str]], time_limit: float) -> 
     # Preserve native/API/process clocks separately. Never infer a missing
     # process clock from an old CSV, and never clip a successful process time.
     for clock in ("alg_time", "total_time", "process_time"):
-        values = [parse_float(row, clock) if row.get("status") == "OPTIMAL"
+        values = [parse_float(row, clock) if row.get("status") in SOLVED_STATUSES
                   else time_limit for row in data_rows]
         sgm_row[clock] = (shifted_geomean(values) if
                           all(v is not None and math.isfinite(v) and v >= 0 for v in values)
@@ -248,12 +253,27 @@ def main() -> int:
         command = solver_command(args, mps_path)
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         banner = f"[{stamp}] solving problem {index}: {mps_path.name}\n"
-        command_line = f"command: {' '.join(shlex.quote(part) for part in command)}\n"
         print(banner.strip())
 
-        tick = time.perf_counter()
-        completed_process = subprocess.run(command, capture_output=True, text=True)
-        process_seconds = time.perf_counter() - tick
+        metadata = {}
+        metadata_error = None
+        with tempfile.TemporaryDirectory(prefix="hprqp-result-") as temporary:
+            metadata_path = Path(temporary) / "result.json"
+            command.extend(["--result-json", str(metadata_path)])
+            command_line = f"command: {' '.join(shlex.quote(part) for part in command)}\n"
+            tick = time.perf_counter()
+            completed_process = subprocess.run(command, capture_output=True, text=True)
+            process_seconds = time.perf_counter() - tick
+            if metadata_path.exists():
+                try:
+                    metadata = json.loads(metadata_path.read_text())
+                    if not isinstance(metadata, dict) or metadata.get("schema") != 1:
+                        raise ValueError("unsupported result metadata schema")
+                    if any(key not in metadata for key in METADATA_FIELDS):
+                        raise ValueError("incomplete result metadata")
+                except (OSError, ValueError) as error:
+                    metadata_error = str(error)
+                    metadata = {}
         combined_output = completed_process.stdout
         if completed_process.stderr:
             combined_output = combined_output + ("\n" if combined_output and not combined_output.endswith("\n") else "") + completed_process.stderr
@@ -265,6 +285,8 @@ def main() -> int:
             append_log(log_path, "\n")
 
         parsed = parse_solver_output(combined_output)
+        parsed.update({key: "" if metadata[key] is None else str(metadata[key])
+                       for key in METADATA_FIELDS if key in metadata})
         row = {
             "name": mps_path.name,
             "iter": parsed.get("iter", ""),
@@ -286,6 +308,9 @@ def main() -> int:
             "input_format": parsed.get("input_format", ""),
             "row_cones": parsed.get("row_cones", ""),
         }
+        if metadata_error is not None:
+            row["status"] = "INVALID_RESULT_METADATA"
+            append_log(log_path, f"Result metadata rejected: {metadata_error}\n")
         if row["status"] in COMPLETED_STATUSES and row["input_format"] != INPUT_FORMAT and has_qcmatrix(mps_path):
             row["status"] = "UNVERIFIED_QCQP_READER"
             append_log(log_path, "QCQP result rejected: rebuild solve_qp with the QCMATRIX input fix.\n")

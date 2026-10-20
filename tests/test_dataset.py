@@ -58,13 +58,15 @@ class Dataset(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data = root / "inputs"; data.mkdir()
-            (data / "tiny.mps").touch()
+            (data / "tiny.mps").write_text("NAME QC\nQCMATRIX ROW\n X X 0.5\nENDATA\n")
             exe = root / "solve_qp"
-            exe.write_text("#!/usr/bin/env python3\nimport pathlib,sys\n"
+            exe.write_text("#!/usr/bin/env python3\nimport json,pathlib,sys\n"
                            "assert not any(x in sys.argv for x in ('--gram','--polishing','--spmv-mode-a'))\n"
                            "p=pathlib.Path(__file__).with_name('calls');p.write_text(p.read_text()+'x' if p.exists() else 'x')\n"
-                           "print('status: OPTIMAL\\ntime: 1\\ntotal_time: 2\\nresidual: 1e-10\\n"
-                           "gram_active: 1\\npolish_attempts: 1\\npolish_accepted: 1')\n")
+                           "meta=pathlib.Path(sys.argv[sys.argv.index('--result-json')+1])\n"
+                           "meta.write_text(json.dumps(dict(schema=1,input_format='mps_qcmatrix_v1',"
+                           "row_cones=1,total_time=2,gram_active=1,polish_attempts=1,polish_accepted=1)))\n"
+                           "print('status: polished_optimal\\ntime: 1\\nresidual: 1e-10')\n")
             exe.chmod(0o755)
             command = [sys.executable, str(ROOT / "scripts/run_dataset.py"), str(data),
                        str(root / "out"), "--build-dir", str(root)]
@@ -74,8 +76,36 @@ class Dataset(unittest.TestCase):
             with (root / "out/HPRQP_result.csv").open() as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual(rows[0]["polish_accepted"], "1")
+            self.assertEqual(rows[0]["status"], "polished_optimal")
+            self.assertEqual(rows[0]["input_format"], dataset.INPUT_FORMAT)
+            self.assertEqual(rows[0]["row_cones"], "1")
             self.assertGreater(float(rows[0]["process_time"]), 0)
+            self.assertAlmostEqual(float(rows[-2]["alg_time"]), 1)
+            self.assertAlmostEqual(float(rows[-2]["total_time"]), 2)
             self.assertEqual(rows[-1]["alg_time"], "1")
+            log = (root / "out/HPRQP_log.txt").read_text()
+            for key in dataset.METADATA_FIELDS:
+                self.assertNotIn(key + ":", log)
+
+    def test_invalid_metadata_not_success(self):
+        for content in ("{", '{"schema":2}', '{"schema":1}'):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                data = root / "inputs"; data.mkdir()
+                (data / "tiny.mps").touch()
+                exe = root / "solve_qp"
+                exe.write_text("#!/usr/bin/env python3\nimport pathlib,sys\n"
+                               "p=pathlib.Path(sys.argv[sys.argv.index('--result-json')+1])\n"
+                               f"p.write_text({content!r})\n"
+                               "print('status: polished_optimal\\ntime: 1')\n")
+                exe.chmod(0o755)
+                subprocess.run([sys.executable, str(ROOT / "scripts/run_dataset.py"),
+                                str(data), str(root / "out"), "--build-dir", str(root)],
+                               check=True, capture_output=True)
+                with (root / "out/HPRQP_result.csv").open() as f:
+                    rows = list(csv.DictReader(f))
+                self.assertEqual(rows[0]["status"], "INVALID_RESULT_METADATA")
+                self.assertEqual(rows[-1]["alg_time"], "0")
 
     def test_failed_status_and_missing_historical_clocks(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,3 +1,4 @@
+#include "shared/diagnostics.h"
 #ifndef HPRQP_PACKED_SPMV_CUH
 #define HPRQP_PACKED_SPMV_CUH
 #include "gpu/types.h"
@@ -44,18 +45,18 @@ static bool packed_spmv_pack(HPRQPGPUELL *e,const HPRQPMatrixCSR *a,unsigned wid
 }
 static void packed_spmv_prepare_pair(HPRQPGPUProblem *g,const HPRQPModel *m) {
     auto start=std::chrono::steady_clock::now();unsigned ka=packed_spmv_width(&m->A),kt=packed_spmv_width(&m->AT);
-    if(!ka||!kt) {std::fprintf(stderr,"PACKED_SPMV_SKIP row_shape widthA=%u widthAT=%u\n",ka,kt);return;}
+    if(!ka||!kt) {hprqp_diagnostic("PACKED_SPMV_SKIP row_shape widthA=%u widthAT=%u\n",ka,kt);return;}
     size_t free_b=0,total_b=0;
     if(cudaMemGetInfo(&free_b,&total_b)!=cudaSuccess) {
-        cudaGetLastError(); std::fprintf(stderr,"PACKED_SPMV_SKIP memory_query\n"); return;
+        cudaGetLastError(); hprqp_diagnostic("PACKED_SPMV_SKIP memory_query\n"); return;
     }
     long double need=12.L*((long double)ka*m->A.nrow+(long double)kt*m->AT.nrow);
-    if(need>free_b/2.L) {std::fprintf(stderr,"PACKED_SPMV_SKIP memory\n");return;}
+    if(need>free_b/2.L) {hprqp_diagnostic("PACKED_SPMV_SKIP memory\n");return;}
     if(!packed_spmv_pack(&g->ell_A,&m->A,ka)||!packed_spmv_pack(&g->ell_AT,&m->AT,kt)) {
-        packed_spmv_free(&g->ell_A);packed_spmv_free(&g->ell_AT);std::fprintf(stderr,"PACKED_SPMV_SKIP allocation\n");return;
+        packed_spmv_free(&g->ell_A);packed_spmv_free(&g->ell_AT);hprqp_diagnostic("PACKED_SPMV_SKIP allocation\n");return;
     }
     double sec=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
-    std::fprintf(stderr,"PACKED_SPMV_READY widthA=%u widthAT=%u bytes=%.0Lf setup_s=%.9f\n",ka,kt,need,sec);
+    hprqp_diagnostic("PACKED_SPMV_READY widthA=%u widthAT=%u bytes=%.0Lf setup_s=%.9f\n",ka,kt,need,sec);
 }
 static __device__ __forceinline__ double packed_spmv_dot(HPRQPGPUELL e,const double *x,size_t row) {
     double sum=0.0;

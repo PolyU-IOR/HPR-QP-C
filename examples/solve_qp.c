@@ -1,5 +1,7 @@
 #include "hprqp.h"
+#include "shared/diagnostics.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -108,7 +110,27 @@ static int parse_spmv_mode_arg(const char *value, HPRQPSpmvMode *out)
 
 static void print_usage(const char *argv0)
 {
-    printf("usage: %s [mps_path] [--max-iter N] [--stoptol X] [--check-iter N] [--print-frequency N] [--time-limit X] [--verbose 0|1] [--use-gpu 0|1] [--device-number N] [--spmv-mode-q auto|cusparse|customized] [--spmv-mode-a auto|cusparse|customized] [--use-scaling 0|1] [--gram off|auto|request] [--polishing 0|1] [--polish-python PATH] [--polish-worker PATH]\n", argv0);
+    printf("usage: %s [mps_path] [--max-iter N] [--stoptol X] [--check-iter N] [--print-frequency N] [--time-limit X] [--verbose 0|1] [--use-gpu 0|1] [--device-number N] [--spmv-mode-q auto|cusparse|customized] [--spmv-mode-a auto|cusparse|customized] [--use-scaling 0|1] [--gram off|auto|request] [--polishing 0|1] [--polish-python PATH] [--polish-worker PATH] [--result-json PATH]\n", argv0);
+}
+
+/* Optional machine metadata keeps dataset validation independent of log verbosity. */
+static int write_metadata(const char *path, const HPRQPModel *model,
+                          const HPRQPResults *results)
+{
+    FILE *file = fopen(path, "w");
+    int failed;
+    if (file == NULL) return 0;
+    fprintf(file, "{\"schema\":1,\"input_format\":\"mps_qcmatrix_v1\","
+                  "\"row_cones\":%zu,\"gram_active\":%d,"
+                  "\"polish_attempts\":%zu,\"polish_accepted\":%d,\"total_time\":",
+            model->num_row_cones, results->gram_active,
+            results->polish_attempts, results->polish_accepted);
+    if (isfinite(results->total_time)) fprintf(file, "%.17g", results->total_time);
+    else fputs("null", file);
+    fputs("}\n", file);
+    failed = ferror(file);
+    if (fclose(file) != 0) failed = 1;
+    return !failed;
 }
 
 int main(int argc, char **argv)
@@ -118,8 +140,13 @@ int main(int argc, char **argv)
     HPRQPResults results;
     HPRQPStatus status;
     const char *mps_path = HPRQP_SOURCE_DIR "/model.mps";
+    const char *result_json_path = NULL;
     size_t i;
     int argi = 1;
+    int metadata_ok = 1;
+
+    puts("HPR-QP-C version: v0.1.1");
+    fflush(stdout);
 
     model_init(&model);
     results_init(&results);
@@ -210,6 +237,8 @@ int main(int argc, char **argv)
             params.polish_python = argv[argi + 1]; argi += 2;
         } else if (strcmp(argv[argi], "--polish-worker") == 0 && argi + 1 < argc) {
             params.polish_worker = argv[argi + 1]; argi += 2;
+        } else if (strcmp(argv[argi], "--result-json") == 0 && argi + 1 < argc) {
+            result_json_path = argv[argi + 1]; argi += 2;
         } else if (argv[argi][0] != '-') {
             mps_path = argv[argi];
             argi += 1;
@@ -227,22 +256,30 @@ int main(int argc, char **argv)
 
     status = solve(&model, &params, &results);
     printf("model: %s\n", mps_path);
-    printf("input_format: mps_qcmatrix_v1\n");
-    printf("row_cones: %zu\n", model.num_row_cones);
-    printf("status: %s\n", status_name(status));
+    printf("status: %s\n", status == HPRQP_STATUS_OPTIMAL && results.polish_accepted
+                               ? "polished_optimal" : status_name(status));
     printf("iter: %zu\n", results.iter);
     printf("time: %.6f\n", results.time);
     printf("objective: %.12g\n", results.primal_obj);
     printf("residual: %.12g\n", results.residuals);
     printf("gap: %.12g\n", results.gap);
-    printf("total_time: %.6f\n", results.total_time);
-    printf("gram_active: %d\n", results.gram_active);
-    printf("polish_attempts: %zu\n", results.polish_attempts);
-    printf("polish_accepted: %d\n", results.polish_accepted);
+    if (hprqp_diagnostics_enabled()) {
+        printf("input_format: mps_qcmatrix_v1\n");
+        printf("row_cones: %zu\n", model.num_row_cones);
+        printf("total_time: %.6f\n", results.total_time);
+        printf("gram_active: %d\n", results.gram_active);
+        printf("polish_attempts: %zu\n", results.polish_attempts);
+        printf("polish_accepted: %d\n", results.polish_accepted);
+    }
     printf("iter_4: %zu\n", results.iter_4);
     printf("time_4: %.6f\n", results.time_4);
     printf("iter_6: %zu\n", results.iter_6);
     printf("time_6: %.6f\n", results.time_6);
+    if (result_json_path != NULL) {
+        metadata_ok = write_metadata(result_json_path, &model, &results);
+        if (!metadata_ok)
+            fprintf(stderr, "failed to write result metadata '%s'\n", result_json_path);
+    }
 
     // if (results.x != NULL) {
     //     printf("x:");
@@ -262,5 +299,5 @@ int main(int argc, char **argv)
 
     results_free(&results);
     model_free(&model);
-    return status == HPRQP_STATUS_OPTIMAL || status == HPRQP_STATUS_MAX_ITER || status == HPRQP_STATUS_TIME_LIMIT ? 0 : 1;
+    return metadata_ok && (status == HPRQP_STATUS_OPTIMAL || status == HPRQP_STATUS_MAX_ITER || status == HPRQP_STATUS_TIME_LIMIT) ? 0 : 1;
 }

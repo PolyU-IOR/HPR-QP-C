@@ -29,9 +29,11 @@ See [configuration, contracts and tests](docs/POLISHING_AND_GRAM.md) and the
 [formal equality-scaling note](docs/equality_gram_scaling.tex).
 
 Direct executable and dataset invocations enable these defaults without extra
-flags. Install the worker dependencies in `python3` on PATH and cuDSS for Gram.
-Unsupported models or missing optional CUDA capabilities retain the documented
-fallbacks. `make run` and `make dataset` prefer the GPU build when CUDA is present.
+flags. The CPU polishing worker is native C++; NumPy and SciPy are not runtime
+dependencies. The GPU build supplies the separate cuDSS dependency for Gram.
+Unsupported models retain the documented fallbacks. A default GPU build requires
+cuDSS, so it cannot silently omit Gram. `make run` and `make dataset` prefer the
+GPU build when CUDA is present.
 
 ```sh
 python3 scripts/run_dataset.py /path/to/mps /path/to/results
@@ -39,12 +41,60 @@ python3 scripts/run_dataset.py /path/to/mps /path/to/results
 
 ## Install
 
-For a fresh setup:
+For a fresh setup, provide a C/C++ compiler, CMake 3.16+, BLAS/LAPACK runtime
+libraries and OpenSSL `libcrypto` (3 or 1.1). Python 3 is used by build helpers and
+the optional dataset script, not by polishing. On Debian/Ubuntu, the usual build
+packages are `build-essential cmake libblas-dev liblapack-dev libssl-dev python3`.
+With a compatible CUDA toolkit and driver installed:
 
 ```sh
-python3 -m pip install -r polishing/requirements.txt
 make
 ```
+
+On a GPU build, `make` reuses a compatible cuDSS installation or automatically
+downloads the benchmark-qualified NVIDIA cuDSS
+0.7.1.4 development archive matching the selected CUDA major (12 or 13), verifies
+its published SHA256, installs it under `.deps/cudss/` in this checkout, and
+continues the build with Gram enabled.
+It does not change drivers, system packages or Python packages. NVIDIA's license
+ships inside the archive. Linux x86_64 and SBSA are supported.
+An initial download is about 110–120 MiB. `make AUTO_INSTALL_CUDSS=0` disables
+network installation and fails clearly if the required library is missing.
+CPU-only builds, help, cleaning and capability inspection do not download it.
+`make setup-cudss` remains available to prepare the dependency separately.
+
+If several CUDA toolkits are installed, use the same `CUDA_ROOT` in both commands:
+
+```sh
+make CUDA_ROOT=/usr/local/cuda-13.3
+make check-cudss CUDA_ROOT=/usr/local/cuda-13.3
+```
+
+Already have cuDSS? Use `make CUDSS_ROOT=/path/to/cudss`;
+that directory must contain `include/cudss.h` and its matching shared library.
+The build also detects NVIDIA wheels, including `libcudss.so.0` without a symlink.
+Do not delete or move the cuDSS installation while using a binary linked to it.
+See [NVIDIA's installation instructions](https://docs.nvidia.com/cuda/cudss/latest/getting_started.html).
+
+For an older checkout previously built without cuDSS, run `make gpu-clean` before
+rebuilding. The updated Makefile automatically rebuilds GPU objects when the
+detected cuDSS capability or CUDA toolkit changes. `make REQUIRE_CUDSS=0` permits
+an intentional GPU build without Gram; it will not reproduce Gram-enabled
+experiments. CMake has the corresponding `HPRQP_REQUIRE_CUDSS=OFF` opt-out.
+CPU-only builds (`make cpu`) do not require cuDSS.
+
+The native worker is built and placed beside `build-cuda/solve_qp`.
+Keep `hprqp_polish_worker` with the executable when copying a build.
+`make install` installs the worker under `libexec/hprqp`.
+Eigen, SuperLU, pocketfft and the JSON parser sources are vendored with their
+licenses. The retained Python worker and `polishing/requirements.txt` serve
+reference tests only; they are not needed for a normal solver run.
+
+After repairing an installation, use a new dataset output directory: the dataset
+runner resumes by skipping already recorded cases, including old timeouts. For a
+one-case diagnostic, `HPRQP_DIAGNOSTICS=1 ./build-cuda/solve_qp co5_1.mps` should
+show Gram setup succeeding rather than `cudss_not_built`. Ordinary run logs remain
+quiet about these extra features unless diagnostics are requested.
 
 Install the shared library:
 

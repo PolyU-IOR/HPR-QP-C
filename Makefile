@@ -17,6 +17,7 @@ BUILD_DIR ?= build
 GPU_BUILD_DIR ?= build-cuda
 SHARED_BUILD_DIR ?= build-shared
 GPU_SHARED_BUILD_DIR ?= build-cuda-shared
+NATIVE_BUILD_DIR ?= build-native-polish
 MODEL ?= model.mps
 DATASET_DIR ?= .
 RESULT_DIR ?= results
@@ -24,6 +25,8 @@ INSTALL_PREFIX ?= $(CURDIR)/install
 GPU_INSTALL_PREFIX ?= $(INSTALL_PREFIX)-gpu
 PYTHON ?= python3
 CUDSS_ROOT ?=
+REQUIRE_CUDSS ?= 1
+AUTO_INSTALL_CUDSS ?= 1
 CUDA_ROOT ?=
 CUDA_HOME ?=
 CUDA_PATH ?=
@@ -76,7 +79,8 @@ CUDA_SEARCH_HINT := PATH, /usr/local/cuda*, /opt/cuda*, CUDA_ROOT, CUDA_HOME, CU
 NVIDIA_SMI := $(shell command -v nvidia-smi 2>/dev/null)
 DETECTED_CC := $(strip $(shell \
 	if [ -n "$(NVIDIA_SMI)" ]; then \
-		nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d ' '; \
+		nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | \
+			sed -n 's/^[[:space:]]*\([0-9][0-9]*\.[0-9][0-9]*\)[[:space:]]*$$/\1/p' | head -n 1; \
 	fi))
 ifneq ($(DETECTED_CC),)
 ifneq ($(DETECTED_CC),N/A)
@@ -102,8 +106,10 @@ GPU_RUN_ENV := LD_LIBRARY_PATH=$(CUDA_LIB_DIR)$(if $(LD_LIBRARY_PATH),:$(LD_LIBR
 CUDSS_INCLUDE := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field include)
 CUDSS_LIBRARY := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field library)
 ifneq ($(strip $(CUDSS_LIBRARY)),)
+CUDSS_LIBDIR := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field libdir)
+CUDSS_LIBNAME := $(shell $(PYTHON) scripts/find_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)" --root "$(CUDSS_ROOT)" --field libname)
 GPU_CPPFLAGS += -DHPRQP_HAVE_CUDSS=1 -I"$(CUDSS_INCLUDE)"
-GPU_LINK_LIBS += "$(CUDSS_LIBRARY)" -Xlinker -rpath -Xlinker "$(dir $(CUDSS_LIBRARY))"
+GPU_LINK_LIBS += -L"$(CUDSS_LIBDIR)" -Xlinker "-l:$(CUDSS_LIBNAME)" -Xlinker -rpath -Xlinker "\"$(CUDSS_LIBDIR)\""
 else
 GPU_CPPFLAGS += -DHPRQP_HAVE_CUDSS=0
 endif
@@ -236,6 +242,25 @@ AUTO_INSTALL_TARGETS += gpu-install-shared
 AUTO_CLEAN_DIRS += $(GPU_BUILD_DIR) $(GPU_SHARED_BUILD_DIR)
 endif
 
+# A bootstrap must re-enter Make after installation: the compiler definitions
+# above were computed before cuDSS existed. One shared prerequisite also avoids
+# racing downloads when multiple GPU targets are requested with -j.
+CUDSS_AUTO_GOALS := all auto-build auto-shared auto-test auto-install gpu gpu-build \
+	gpu-build-shared gpu-test gpu-test-shared gpu-install-shared shared test install \
+	run run-gpu solve gpu-solve dataset dataset-gpu rebuild fresh gpu-rebuild gpu-fresh
+CUDSS_REQUESTED_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
+CUDSS_GPU_REQUESTED := $(filter $(CUDSS_AUTO_GOALS) $(GPU_BUILD_DIR)/% $(GPU_SHARED_BUILD_DIR)/%,$(CUDSS_REQUESTED_GOALS))
+CUDSS_BOOTSTRAP := $(if $(and $(CUDA_NVCC),$(CUDSS_GPU_REQUESTED),$(filter 1,$(REQUIRE_CUDSS)),$(filter 1,$(AUTO_INSTALL_CUDSS))),$(if $(strip $(CUDSS_ROOT)$(CUDSS_LIBRARY)$(HPRQP_CUDSS_BOOTSTRAPPED)),,yes))
+
+ifeq ($(CUDSS_BOOTSTRAP),yes)
+.PHONY: _bootstrap-cudss $(CUDSS_REQUESTED_GOALS)
+$(CUDSS_REQUESTED_GOALS): _bootstrap-cudss
+_bootstrap-cudss:
+	@echo 'Default GPU build: installing the matching verified cuDSS locally (AUTO_INSTALL_CUDSS=0 disables downloads).'
+	$(Q)$(PYTHON) scripts/setup_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)"
+	+$(Q)$(MAKE) HPRQP_CUDSS_BOOTSTRAPPED=1 $(CUDSS_REQUESTED_GOALS)
+else
+
 all: auto-build
 
 cpu: build
@@ -259,6 +284,8 @@ help:
 	  '  make shared           Build CPU shared libs by default, or CPU+GPU shared libs when CUDA is available' \
 	  '  make test             Run CPU tests by default, or CPU+GPU tests when CUDA is available' \
 	  '  make install          Install CPU shared artifacts by default, or CPU+GPU shared artifacts when CUDA is available' \
+	  '  make setup-cudss      Download verified cuDSS locally for the selected CUDA toolkit (explicit setup)' \
+	  '  make check-cudss      Verify default GPU Gram build dependency without running a solver' \
 	  '  make clean            Remove default build directories for the current machine' \
 	  '  make build            Build the CPU solver and tests only' \
 	  '  make build-shared     Build the shared CPU library for wrappers' \
@@ -303,6 +330,8 @@ help:
 	  '  CUDA_PATH=path         Alternative CUDA toolkit hint used by auto-detection' \
 	  '  CUDA_NVCC=path         Override the auto-detected nvcc for gpu-* targets' \
 	  '  CUDSS_ROOT=path        Optional override of automatically detected cuDSS' \
+	  '  REQUIRE_CUDSS=0        Explicitly permit a GPU build without equality Gram support' \
+	  '  AUTO_INSTALL_CUDSS=0   Disable automatic cuDSS downloads (missing dependency becomes a build error)' \
 	  '  GPU_SM=arch            Override the detected GPU compute capability (for example: GPU_SM=90)' \
 	  '  V=1                    Show raw compile and link commands' \
 	  '  SHOW_WARNINGS=1        Enable compiler warning output' \
@@ -313,7 +342,7 @@ help:
 	  '  CUDA_NVCC:         $(if $(CUDA_NVCC),$(CUDA_NVCC),<not found>)' \
 	  '  CUDA_ARCH:         $(CUDA_ARCH)' \
 	  '' \
-	  'This Makefile builds directly with gcc/g++/nvcc and does not require CMake.'
+	  'The solver uses gcc/g++/nvcc; the native CPU polishing worker also requires CMake and BLAS/LAPACK.'
 
 _announce-auto-build:
 	@if [ -n "$(CUDA_NVCC)" ]; then \
@@ -402,6 +431,31 @@ _require-cuda:
 	@printf 'Using CUDA toolkit root: %s\n' '$(CUDA_TOOLKIT_ROOT)'
 	@printf 'Using CUDA arch: %s\n' '$(CUDA_ARCH)'
 
+.PHONY: setup-cudss check-cudss _require-cudss _gpu-config-force
+setup-cudss: _require-cuda
+	$(Q)$(PYTHON) scripts/setup_cudss.py --cuda-root "$(CUDA_TOOLKIT_ROOT)"
+
+check-cudss: _require-cuda _require-cudss
+	@printf 'cuDSS include: %s\ncuDSS library: %s\n' '$(CUDSS_INCLUDE)' '$(CUDSS_LIBRARY)'
+
+_require-cudss:
+	@if [ -z "$(CUDSS_LIBRARY)" ]; then \
+		if [ "$(REQUIRE_CUDSS)" != "0" ]; then \
+			echo 'error: default GPU Gram requires a compatible cuDSS development package.' >&2; \
+			echo 'Run make setup-cudss with the same CUDA_ROOT, then make again; or set CUDSS_ROOT=/path/to/cudss.' >&2; \
+			echo 'Only for an intentional reduced-capability build: REQUIRE_CUDSS=0.' >&2; \
+			exit 1; \
+		fi; \
+		echo 'WARNING: explicitly building without cuDSS; equality Gram will be unavailable.' >&2; \
+	else \
+		printf 'Using cuDSS: %s\n' '$(CUDSS_LIBRARY)'; \
+	fi
+
+$(GPU_BUILD_DIR)/gpu-config.json: _gpu-config-force | _require-cudss
+	$(Q)$(PYTHON) scripts/write_gpu_config.py --output "$@" \
+		--cuda "$(CUDA_TOOLKIT_ROOT)" --nvcc "$(CUDA_NVCC)" --arch "$(GPU_SM)" \
+		--cudss_include "$(CUDSS_INCLUDE)" --cudss_library "$(CUDSS_LIBRARY)"
+
 $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(Q)$(CC) $(CPU_CPPFLAGS) $(COMMON_CFLAGS) -c $< -o $@
@@ -410,15 +464,15 @@ $(BUILD_DIR)/obj/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(Q)$(CXX) $(CPU_CPPFLAGS) $(COMMON_CXXFLAGS) -c $< -o $@
 
-$(GPU_BUILD_DIR)/obj/%.o: %.c
+$(GPU_BUILD_DIR)/obj/%.o: %.c $(GPU_BUILD_DIR)/gpu-config.json
 	@mkdir -p $(dir $@)
 	$(Q)$(CC) $(GPU_CPPFLAGS) $(COMMON_CFLAGS) -c $< -o $@
 
-$(GPU_BUILD_DIR)/obj/%.o: %.cpp
+$(GPU_BUILD_DIR)/obj/%.o: %.cpp $(GPU_BUILD_DIR)/gpu-config.json
 	@mkdir -p $(dir $@)
 	$(Q)$(CXX) $(GPU_CPPFLAGS) $(COMMON_CXXFLAGS) -c $< -o $@
 
-$(GPU_BUILD_DIR)/obj/%.o: %.cu | _require-cuda
+$(GPU_BUILD_DIR)/obj/%.o: %.cu $(GPU_BUILD_DIR)/gpu-config.json | _require-cuda
 	@mkdir -p $(dir $@)
 	$(Q)$(CUDA_NVCC) $(GPU_CPPFLAGS) $(COMMON_NVCCFLAGS) -c $< -o $@
 
@@ -427,7 +481,7 @@ $(CPU_LIB): $(CPU_CORE_OBJECTS)
 	$(Q)$(AR) rcs $@ $^
 	$(Q)$(RANLIB) $@
 
-$(GPU_LIB): $(GPU_CORE_OBJECTS) | _require-cuda
+$(GPU_LIB): $(GPU_CORE_OBJECTS) | _require-cuda native-polishing
 	@mkdir -p $(dir $@)
 	$(Q)$(AR) rcs $@ $^
 	$(Q)$(RANLIB) $@
@@ -446,7 +500,7 @@ $(CPU_SHARED_LIB): $(CPU_CORE_OBJECTS)
 	@mkdir -p $(dir $@)
 	$(Q)$(CXX) -shared -o $@ $^ $(CPU_LINK_LIBS)
 
-$(GPU_SHARED_LIB): $(GPU_CORE_OBJECTS) | _require-cuda
+$(GPU_SHARED_LIB): $(GPU_CORE_OBJECTS) | _require-cuda native-polishing
 	@mkdir -p $(dir $@)
 	$(Q)$(CUDA_NVCC) -shared $(COMMON_NVCCFLAGS) -o $@ $^ $(GPU_LINK_LIBS)
 
@@ -600,8 +654,6 @@ install-shared: build-shared $(CPU_SOLVER_BINARY)
 	@mkdir -p "$(INSTALL_PREFIX)/bin"
 	cp $(CPU_SOLVER_BINARY) "$(INSTALL_PREFIX)/bin/solve_qp"
 	cp -R include/. "$(INSTALL_PREFIX)/include/"
-	@mkdir -p "$(INSTALL_PREFIX)/share/hprqp/polishing"
-	tar --exclude=__pycache__ --exclude='*.pyc' -C polishing -cf - . | tar -C "$(INSTALL_PREFIX)/share/hprqp/polishing" -xf -
 
 gpu-install-shared: gpu-build-shared $(GPU_SOLVER_BINARY)
 	@mkdir -p "$(GPU_INSTALL_PREFIX)/lib" "$(GPU_INSTALL_PREFIX)/include"
@@ -609,8 +661,9 @@ gpu-install-shared: gpu-build-shared $(GPU_SOLVER_BINARY)
 	@mkdir -p "$(GPU_INSTALL_PREFIX)/bin"
 	cp $(GPU_SOLVER_BINARY) "$(GPU_INSTALL_PREFIX)/bin/solve_qp"
 	cp -R include/. "$(GPU_INSTALL_PREFIX)/include/"
-	@mkdir -p "$(GPU_INSTALL_PREFIX)/share/hprqp/polishing"
-	tar --exclude=__pycache__ --exclude='*.pyc' -C polishing -cf - . | tar -C "$(GPU_INSTALL_PREFIX)/share/hprqp/polishing" -xf -
+	@mkdir -p "$(GPU_INSTALL_PREFIX)/libexec/hprqp" "$(GPU_INSTALL_PREFIX)/share/hprqp/licenses"
+	cp "$(NATIVE_BUILD_DIR)/hprqp_polish_worker" "$(GPU_INSTALL_PREFIX)/libexec/hprqp/"
+	tar -C third_party -cf - eigen/COPYING.MPL2 nlohmann/LICENSE.MIT pocketfft/LICENSE.md superlu/License.txt SCIPY_LICENSE.txt | tar -C "$(GPU_INSTALL_PREFIX)/share/hprqp/licenses" -xf -
 
 auto-install: _announce-auto-install $(AUTO_INSTALL_TARGETS)
 
@@ -658,6 +711,18 @@ $(BUILD_DIR)/test_polish_progress: tests/polishing/test_progress.cpp src/shared/
 	$(Q)$(CXX) -std=c++17 -Isrc/shared $< -o $@
 
 .PHONY: test-polishing
+.PHONY: native-polishing
+native-polishing:
+	$(Q)cmake -S polishing/native -B "$(NATIVE_BUILD_DIR)" -DCMAKE_BUILD_TYPE=Release
+	$(Q)cmake --build "$(NATIVE_BUILD_DIR)" --target hprqp_polish_worker --parallel 2
+	@mkdir -p "$(GPU_BUILD_DIR)"
+	$(Q)cmp -s "$(NATIVE_BUILD_DIR)/hprqp_polish_worker" "$(GPU_BUILD_DIR)/hprqp_polish_worker" || cp "$(NATIVE_BUILD_DIR)/hprqp_polish_worker" "$(GPU_BUILD_DIR)/hprqp_polish_worker"
+
+.PHONY: test-native-polishing
+test-native-polishing: native-polishing
+	$(Q)cmake --build "$(NATIVE_BUILD_DIR)" --target hprqp_polish_inspect --parallel 2
+	$(Q)HPRQP_NATIVE_BUILD="$(NATIVE_BUILD_DIR)" PYTHONPATH="$(CURDIR)/polishing:$(PYTHONPATH)" $(PYTHON) tests/polishing/test_native.py
+
 test-polishing: $(BUILD_DIR)/test_polish_progress $(BUILD_DIR)/test_polish_publication $(BUILD_DIR)/test_polish_worker_path
 	$(Q)$(BUILD_DIR)/test_polish_progress
 	$(Q)$(BUILD_DIR)/test_polish_publication
@@ -694,6 +759,7 @@ test-entrypoints: $(BUILD_DIR)/test_defaults $(BUILD_DIR)/test_polish_worker_pat
 	$(Q)$(BUILD_DIR)/test_polish_worker_path
 	$(Q)$(PYTHON) tests/test_dataset.py
 	$(Q)$(PYTHON) tests/test_cudss_discovery.py
+	$(Q)$(PYTHON) tests/test_cudss_setup.py
 
 $(BUILD_DIR)/test_defaults: $(call map_objects,$(BUILD_DIR),tests/test_defaults.c) $(CPU_LIB)
 	$(Q)$(CXX) -o $@ $^ $(CPU_LINK_LIBS)
@@ -707,3 +773,5 @@ HPRQP_HEADERS := $(wildcard include/*.h include/shared/*.h include/cpu/*.h inclu
 $(CPU_CORE_OBJECTS) $(GPU_CORE_OBJECTS) $(CPU_TEST_SUPPORT_OBJECT) $(GPU_TEST_SUPPORT_OBJECT) \
 $(call map_objects,$(BUILD_DIR),$(CPU_TEST_SOURCES) examples/solve_qp.c) \
 $(call map_objects,$(GPU_BUILD_DIR),$(GPU_TEST_SOURCES) $(GPU_EXAMPLE_SOURCES) examples/solve_qp.c tests/polishing/native_driver.cpp): $(HPRQP_HEADERS)
+
+endif # cuDSS bootstrap / normal build

@@ -12,16 +12,16 @@ Recompile clients:
 
 ## Build and use
 
-Linux, a 64-bit host, C++17 and CUDA are required for live GPU polishing.
-The worker needs Python 3, NumPy and SciPy; the owner needs OpenSSL's
-`libcrypto.so.3` or `libcrypto.so.1.1` for payload verification. Python is started
-only when an eligible snapshot is available. Gram additionally needs cuDSS.
-The qualified environment used CUDA 12.8, cuDSS 0.7.1, NumPy 2.3.4 and SciPy 1.16.2.
-Broader ranges in `polishing/requirements.txt` are installation constraints,
-not claims of identical numerical trajectories on every version.
+Linux, a 64-bit little-endian host, C++17 and CUDA are required for live GPU
+polishing. The default worker is a native executable linked to BLAS/LAPACK.
+Building it requires CMake 3.16+. The worker and owner use OpenSSL's
+`libcrypto.so.3` or `libcrypto.so.1.1` for payload verification. Gram additionally
+needs cuDSS. Python 3 serves build helpers and the dataset script; NumPy/SciPy
+are needed only for optional reference tests, not for runtime polishing.
+The native port preserves the correction equations and certification rules;
+different linear-algebra implementations may change floating-point trajectories.
 
 ```sh
-python3 -m pip install -r polishing/requirements.txt
 make
 ./build-cuda/solve_qp model.mps
 python3 scripts/run_dataset.py /path/to/mps /path/to/results
@@ -34,10 +34,18 @@ selection, and packed/fused sparse updates where eligible. The dataset script
 prefers `build-cuda/solve_qp`; `make run` and `make dataset` select the CUDA build
 when a toolkit is available. CPU-only builds cannot run GPU features.
 
-Make and CMake discover cuDSS from standard prefixes, the selected toolkit,
+Make and CMake discover cuDSS from the local `.deps/cudss/cuda<major>` setup,
+standard prefixes, the selected toolkit,
 `/opt/nvidia/cudss`, or a matching NVIDIA Python wheel. A nonstandard installation
 can be located with the build hint `CUDSS_ROOT`; this is a dependency location,
-not a runtime enable flag. Without cuDSS, Gram reports a decline and HPR continues.
+not a runtime enable flag. Default GPU builds require this capability; use
+`make` to automatically install the matching, hash-verified NVIDIA 0.7.1.4 archive
+locally when needed, or provide an existing matching installation. Set
+`AUTO_INSTALL_CUDSS=0` for offline builds, or use `make setup-cudss` to prepare
+the dependency separately. See the
+[installation instructions](../README.md#install). An intentional reduced
+build needs `REQUIRE_CUDSS=0` (CMake: `HPRQP_REQUIRE_CUDSS=OFF`); that build
+declines Gram and cannot reproduce Gram-enabled experiments.
 CMake also enables CUDA automatically when a CUDA compiler is available; explicit
 `-DHPRQP_ENABLE_CUDA=OFF` builds CPU only. SpMVOp needs CUDA 13.3 or newer and falls
 back to the existing cuSPARSE path on older toolkits or unsupported operations.
@@ -46,17 +54,19 @@ The CUDA toolkit must have a compatible driver. On hosts using NVIDIA's forward
 compatibility package, configure that package's library path as part of the CUDA
 installation. Automatic feature selection does not repair an incompatible driver.
 
-The CPU worker uses `python3` on PATH. Install its NumPy/SciPy requirements in that
-interpreter (or activate the intended virtual environment). Source builds locate
-the source-tree worker automatically; installed executables and shared libraries
-locate `share/hprqp/polishing` relative to their installed location, including after
-relocation. A custom `polish_python` or `polish_worker` is an optional override.
-Do not deploy the executable alone without its worker package and dependencies.
+Source builds place `hprqp_polish_worker` beside the GPU executable. Installed
+executables and shared libraries locate it under `libexec/hprqp`, including after
+relocation. A custom native `polish_worker` remains an optional override.
+Non-null `polish_python` explicitly selects the retained Python reference worker;
+it is never selected by default. Do not deploy a solver alone without its native
+worker and shared libraries. Each worker gets a single-thread BLAS environment
+before launch; this does not alter the GPU owner's environment.
 
 The C API and existing Python/Julia QP wrappers inherit the same central defaults.
 Recompile C clients after this layout change. Native SOC and sparse-factor QCQP
-construction remain exposed through the C array API; the dataset runner reads
-MPS QPs and does not add a QPLIB QCQP parser.
+construction remain exposed through the C array API. The executable and dataset
+entry point both read supported convex MPS `QCMATRIX` constraints and convert
+them to the low-rank SOC representation.
 
 ```c
 HPRQPParams params;
@@ -116,8 +126,20 @@ limits changes the policy and requires separate performance evaluation.
 `polish_directory` selects an existing parent directory (default `/tmp`);
 `polish_keep_files=1` preserves snapshots, events and rejection reports.
 Defaults use a private directory and delete it on completion. Failed dependency
-loading disables the worker, with a diagnostic when `verbose=1`.
+loading disables the worker. Feature diagnostics are hidden by default; set
+`HPRQP_DIAGNOSTICS=1` to inspect polishing, Gram and GPU backend notices.
 Variable-cone models currently decline CPU polishing.
+
+Ordinary progress logging remains controlled by `verbose`. The executable reports
+`status: polished_optimal` when a CPU-certified polishing result terminates the
+solve; otherwise an ordinary optimum remains `status: OPTIMAL`. The C API keeps
+its existing OPTIMAL status and `polish_accepted` flag.
+
+`--result-json PATH` writes machine metadata without printing extra summary
+fields. The dataset script uses this automatically to retain input-reader
+verification, Gram/polishing fields and API timing in its CSV. It counts and
+resumes both optimum statuses as successes. `process_time` continues to measure
+the complete solver subprocess, including CPU-worker cleanup.
 
 ## Gram policy and mathematical meaning
 
@@ -166,6 +188,9 @@ CPU-worker time again when it overlaps GPU work.
 
 ```sh
 make test-cpu
+# Optional independent test oracles only:
+python3 -m pip install -r polishing/requirements.txt
+make test-native-polishing
 make test-polishing
 make gpu-test
 make build-cuda/polish_native_driver
@@ -178,11 +203,14 @@ already exist. Tests cover dense Gram equations, activation/fallback, analytic
 QP objectives, exact terminal payload return, byte-identical GPU trajectories
 after worker failure, process cancellation, publication tampering and independent
 native checking. See [integration evidence](INTEGRATION_VALIDATION.md).
+The subsequent [native-port and installation qualification](NATIVE_POLISHING_VALIDATION.md)
+records the default C++ worker, automatic cuDSS setup and focused live checks.
 
 The dataset CSV records `process_time` (launch through exit), `total_time` (the
 solve API), and `alg_time` (native loop) separately, plus actual Gram activation
-and polishing attempts/acceptance. `OPTIMAL` controls solved counts. SGM10 uses
+and polishing attempts/acceptance. `OPTIMAL` and `polished_optimal` count as
+solved. SGM10 uses
 the configured time limit for failed rows and retains successful process times
 even when they exceed that limit. Historical rows lacking a required successful
 clock leave that clock's aggregate blank; no timing values are invented. Resume
-skips completed OPTIMAL, MAX_ITER and TIME_LIMIT records.
+skips completed OPTIMAL, polished_optimal, MAX_ITER and TIME_LIMIT records.

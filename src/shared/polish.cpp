@@ -1,3 +1,4 @@
+#include "shared/diagnostics.h"
 #include "polish.h"
 #include "polish/async_process.hpp"
 #include "polish/cpu_publication.hpp"
@@ -60,10 +61,12 @@ public:
     bool pending=false,accepted=false,disabled=false;
     size_t attempts=0;double child_spent=0;
     Owner(const HPRQPModel *m,const HPRQPParams& p):params(p),model(m) {
-        python=p.polish_python?p.polish_python:"python3";
+        // A Python interpreter is used only for an explicitly requested
+        // reference/test worker. Production starts the native executable.
+        python=p.polish_python?p.polish_python:"";
         worker=worker_path(p.polish_worker,
                           package_anchors(reinterpret_cast<const void*>(&hprqp_polish_create)),
-                          HPRQP_SOURCE_DIR);
+                          HPRQP_SOURCE_DIR,!python.empty());
         if(p.polish_episode_seconds<0||p.polish_total_seconds<0||!std::isfinite(p.polish_episode_seconds)||!std::isfinite(p.polish_total_seconds))throw std::runtime_error("invalid worker budgets");
     }
     ~Owner() {
@@ -74,7 +77,7 @@ public:
         if(run.empty())return;
         std::ofstream f(run+"/events.jsonl",std::ios::app);
         f<<"{\"event\":"<<quote(what)<<",\"iteration\":"<<iter<<",\"attempt\":"<<attempts<<"}\n";
-        if(params.verbose)std::fprintf(stderr,"POLISH %s iteration=%zu attempt=%zu\n",what,iter,attempts);
+        if(params.verbose)hprqp_diagnostic("POLISH %s iteration=%zu attempt=%zu\n",what,iter,attempts);
     }
     int poll(HPRQPSolverBackendContext *ctx,const HPRQPSolverBackendOps *ops,const HPRQPResiduals *base,
              size_t iter,double seconds,double *x,double*w,double*z,double*y,HPRQPResiduals*out) {
@@ -126,21 +129,23 @@ public:
         req<<std::setprecision(17)<<"{\"token\":"<<quote(id)<<",\"parent_pid\":"<<getpid()<<",\"model\":"<<quote(run+"/model.bin")
            <<",\"dimensions\":["<<n<<","<<m<<"],\"iteration\":"<<iter<<",\"tolerance\":"<<params.stoptol
            <<",\"seconds\":"<<budget<<",\"memory_bytes\":"<<params.polish_memory_bytes<<",\"config\":{\"backend\":\"auto\"}}\n";req.close();
-        child.start({python,worker,episode+"/request.json"},episode+"/worker.log",budget);
+        std::vector<std::string> command{worker,episode+"/request.json"};
+        if(!python.empty())command.insert(command.begin(),python);
+        child.start(command,episode+"/worker.log",budget);
         pending=true;event("LAUNCHED",iter);return 0;
     }
 };
 }
 void *hprqp_polish_create(const HPRQPModel *m,const HPRQPParams *p) {
     if(!p->polishing||m->num_var_cones)return nullptr;
-    try{return new Owner(m,*p);}catch(const std::exception& e){if(p->verbose)std::fprintf(stderr,"POLISH_DISABLED %s\n",e.what());return nullptr;}
+    try{return new Owner(m,*p);}catch(const std::exception& e){if(p->verbose)hprqp_diagnostic("POLISH_DISABLED %s\n",e.what());return nullptr;}
 }
 int hprqp_polish_poll(void *handle,HPRQPSolverBackendContext *ctx,const HPRQPSolverBackendOps *ops,
     const HPRQPResiduals *base,size_t iter,double seconds,double*x,double*w,double*z,double*y,HPRQPResiduals*out) {
     auto o=static_cast<Owner*>(handle);if(!o)return 0;
     try{return o->poll(ctx,ops,base,iter,seconds,x,w,z,y,out);}
     catch(const std::exception& e){o->child.cancel();o->pending=false;o->disabled=true;o->event("DISABLED",iter);
-        if(o->params.verbose)std::fprintf(stderr,"POLISH_DISABLED %s\n",e.what());return 0;}
+        if(o->params.verbose)hprqp_diagnostic("POLISH_DISABLED %s\n",e.what());return 0;}
 }
 void hprqp_polish_destroy(void *handle,HPRQPResults *r) {
     auto o=static_cast<Owner*>(handle);if(!o)return;

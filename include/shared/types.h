@@ -99,8 +99,8 @@ typedef struct HPRQPParams {
     HPRQPSpmvMode spmv_mode_a;
     HPRQPGramMode gram_mode;
     int polishing; /* GPU owner, isolated CPU worker; terminal candidates only */
-    const char *polish_python; /* NULL: python3 on PATH */
-    const char *polish_worker; /* NULL: installed package or source-tree worker */
+    const char *polish_python; /* NULL: native worker; non-NULL: explicit Python reference/testing override */
+    const char *polish_worker; /* NULL: installed or build-tree native worker executable */
     const char *polish_directory; /* NULL: private directory under /tmp */
     int polish_keep_files;
     size_t polish_max_attempts; /* 0: no attempt-count limit */

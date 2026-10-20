@@ -22,8 +22,11 @@ int main(int argc,char**argv){try{
  if(build_from_QAbc_soc(&Q,&A,c.data(),al.data(),au.data(),l.data(),u.data(),constant,&cones,&model))throw std::runtime_error("build");
  if(inspect){std::cout<<hprqp_gram_auto_eligible(&model)<<"\n";model_free(&model);matrix_csr_free(&Q);matrix_csr_free(&A);return 0;}
  HPRQPParams p;params_set_defaults(&p);p.gram_mode=(HPRQPGramMode)std::stoi(argv[3]);p.polishing=std::stoi(argv[4]);p.polish_directory=argv[2];p.polish_keep_files=1;
- p.polish_python=argv[5];p.stoptol=1e-8;p.check_iter=100;p.time_limit=60;p.max_iter=1000000;p.verbose=0;p.print_frequency=0;p.spmv_mode_a=p.spmv_mode_q=HPRQP_SPMV_MODE_CUSPARSE;
- if(argc>6)p.polish_worker=argv[6];if(argc>7){p.max_iter=std::stoull(argv[7]);p.stoptol=1e-14;}
+ p.polish_python=std::string(argv[5])=="-"?nullptr:argv[5];p.stoptol=1e-8;p.check_iter=100;p.time_limit=60;p.max_iter=1000000;p.verbose=0;p.print_frequency=0;p.spmv_mode_a=p.spmv_mode_q=HPRQP_SPMV_MODE_CUSPARSE;
+ if(argc>6&&std::string(argv[6])!="-")p.polish_worker=argv[6];if(argc>7){p.max_iter=std::stoull(argv[7]);p.stoptol=1e-14;}
+ // Optional complete-run contract: retain native accuracy and charge the
+ // requested time allowance. The fixed-update parity interface above is unchanged.
+ if(argc>8){p.time_limit=std::stod(argv[8]);p.stoptol=1e-8;}
  HPRQPResults r={};auto status=solve(&model,&p,&r);
  std::cout<<std::setprecision(17)<<"{\"status\":"<<status<<",\"error\":"<<(std::isfinite(r.residuals)?r.residuals:-1.)<<",\"objective\":"<<r.primal_obj<<",\"iterations\":"<<r.iter<<",\"gram\":"<<r.gram_active<<",\"attempts\":"<<r.polish_attempts<<",\"accepted\":"<<r.polish_accepted<<",\"total_time\":"<<r.total_time<<"}\n";
  if(r.x){std::ofstream o(std::string(argv[2])+"/solution.bin",std::ios::binary);o.write("HPRSOLS1",8);uint64_t sz[]={n,model.A.nrow,n,n};o.write((char*)sz,32);for(auto pair:{std::pair<double*,size_t>{r.x,n},{r.y,model.A.nrow},{r.z,n},{r.w,n}})if(pair.second)o.write((char*)pair.first,pair.second*8);}

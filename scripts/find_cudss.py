@@ -27,14 +27,17 @@ def discover(roots, major):
     for root in roots:
         root = Path(root)
         header = root / "include/cudss.h"
-        libraries = [root / sub / "libcudss.so" for sub in
-                     ("lib", "lib64", "lib/x86_64-linux-gnu", "lib/aarch64-linux-gnu")]
+        # Wheels do not ship symlinks. Accept their SONAME as well as the
+        # unversioned linker name shipped by NVIDIA's tar/deb packages.
+        libraries = [root / sub / name for sub in
+                     ("lib", "lib64", "lib/x86_64-linux-gnu", "lib/aarch64-linux-gnu")
+                     for name in ("libcudss.so", "libcudss.so.0")]
         if not header.is_file():
             continue
         for library in libraries:
             if library.is_file() and compatible(library, major):
-                # Keep the linker-facing .so name: nvcc does not accept a
-                # versioned .so.0.x filename as a positional link input.
+                # The Makefile passes this basename directly to the linker;
+                # nvcc does not accept a versioned .so as a positional input.
                 return str(header.parent.resolve()), str(library.absolute())
     return "", ""
 
@@ -43,7 +46,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--root", default="")
     p.add_argument("--cuda-root", default="")
-    p.add_argument("--field", choices=("include", "library"), required=True)
+    p.add_argument("--field", choices=("include", "library", "libdir", "libname"), required=True)
     a = p.parse_args()
     major = ""
     try:
@@ -52,7 +55,8 @@ def main():
         major = re.search(r"release (\d+)", output).group(1)
     except (OSError, subprocess.CalledProcessError, AttributeError):
         pass
-    roots = [a.root] if a.root else [a.cuda_root, "/usr/local", "/usr",
+    bundled = Path(__file__).resolve().parents[1] / ".deps" / "cudss" / f"cuda{major}"
+    roots = [a.root] if a.root else [bundled, a.cuda_root, "/usr/local", "/usr",
                                     "/usr/local/cudss", "/opt/cudss"]
     if not a.root:
         roots += sorted(glob.glob("/opt/nvidia/cudss/*"), reverse=True)
@@ -70,7 +74,10 @@ def main():
     if a.root and not library:
         print("No compatible cuDSS header/library under " + a.root, file=sys.stderr)
         return 1
-    print(include if a.field == "include" else library)
+    fields = {"include": include, "library": library,
+              "libdir": str(Path(library).parent) if library else "",
+              "libname": Path(library).name if library else ""}
+    print(fields[a.field])
     return 0
 
 

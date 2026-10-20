@@ -1,3 +1,4 @@
+#include "shared/diagnostics.h"
 #include "spmv_operation.h"
 #include "cuda_common.h"
 #include <new>
@@ -489,7 +490,7 @@ HPRQPStatus gpu_workspace_prepare_spmv(HPRQPGPUWorkspace *workspace,
         }
     }
 
-    if (verbose) {
+    if (verbose && hprqp_diagnostics_enabled()) {
         const char *names[] = {"A", "AT", "Q"};
         void *operations[] = {workspace->spmv_A.operation, workspace->spmv_AT.operation,
                               workspace->spmv_Q.operation};
