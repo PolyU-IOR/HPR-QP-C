@@ -66,20 +66,18 @@ With a compatible CUDA toolkit and driver installed:
 make
 ```
 
-For native CPU polishing, `make` first reuses working BLAS/LAPACK libraries.
-On Ubuntu 22.04 x86_64, missing libraries and their Fortran/GCC runtimes are
-included in `deps/native/` and installed privately under `.deps/native/` after
-checksum checks. This step works offline and does not require APT. The compact
-bundle retains original licenses, runtime exceptions and source/package provenance.
-
-On other Debian/Ubuntu Linux x86_64 hosts, missing libraries are still downloaded
-from the distribution's APT metadata with verified hashes. That fallback requires
-`apt-get`/`dpkg-deb`, usable package indexes and network access. Neither path runs
-`sudo`, package installation scripts or changes system packages.
+For native CPU polishing, `make` first reuses working BLAS/LAPACK libraries,
+including an existing private installation under `.deps/native/`.
+On Debian/Ubuntu Linux x86_64, missing libraries and their Fortran/GCC runtimes
+are downloaded from the distribution's APT metadata with verified hashes and
+installed privately under `.deps/native/`. This requires `apt-get`/`dpkg-deb`,
+usable package indexes and network access. It does not run `sudo`, execute
+package installation scripts or change system packages.
 `make setup-native` prepares missing native libraries explicitly.
-`AUTO_INSTALL_NATIVE_DEPS=0` disables native dependency downloads; matching
-bundled libraries can still be installed offline. Other platforms must provide
-compatible BLAS/LAPACK libraries themselves. CMake remains an optional alternative
+`AUTO_INSTALL_NATIVE_DEPS=0` disables native dependency downloads; existing
+usable system or private libraries are still reused. Other platforms must
+provide compatible BLAS/LAPACK libraries themselves. No platform-specific binary
+runtime is bundled in the source tree. CMake remains an optional alternative
 build system; plain `make` does not invoke or install it.
 
 The native worker finds its private runtime libraries automatically; no
