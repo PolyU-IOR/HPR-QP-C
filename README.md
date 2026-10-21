@@ -71,7 +71,10 @@ including an existing private installation under `.deps/native/`.
 On Debian/Ubuntu Linux x86_64, missing libraries and their Fortran/GCC runtimes
 are downloaded from the distribution's APT metadata with verified hashes and
 installed privately under `.deps/native/`. This requires `apt-get`/`dpkg-deb`,
-usable package indexes and network access. It does not run `sudo`, execute
+usable package indexes and network access. For standard Ubuntu archive URLs,
+the installer tries official HTTPS mirror alternatives while preserving the
+exact APT package path, size and checksum. The installation receipt records both
+the metadata URL and the successful download URL. It does not run `sudo`, execute
 package installation scripts or change system packages.
 `make setup-native` prepares missing native libraries explicitly.
 `AUTO_INSTALL_NATIVE_DEPS=0` disables native dependency downloads; existing

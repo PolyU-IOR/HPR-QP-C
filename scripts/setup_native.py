@@ -9,8 +9,11 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import tempfile
+import urllib.error
+from urllib.parse import urlsplit, urlunsplit
 from download_utils import open_download
 from build_native import discover_libraries, build as build_native
 
@@ -25,11 +28,49 @@ def digest(path, algorithm="sha256"):
     return h.hexdigest()
 
 
+def native_package_urls(url):
+    """Use official HTTPS alternatives only for ordinary Ubuntu archive URLs.
+
+    Keep the exact APT-selected package path. Custom repositories, credentials,
+    nondefault ports and signed/query URLs are left untouched.
+    """
+    parsed = urlsplit(url)
+    if (parsed.scheme not in ("http", "https")
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port is not None or parsed.query or parsed.fragment
+            or not parsed.path.startswith("/ubuntu/pool/")):
+        return [url]
+    host = (parsed.hostname or "").lower()
+    if re.fullmatch(r"(?:[a-z0-9-]+\.)?archive\.ubuntu\.com", host):
+        hosts = ["archive.ubuntu.com", host]
+    elif host == "security.ubuntu.com":
+        hosts = [host, "archive.ubuntu.com"]
+    else:
+        return [url]
+    candidates = [urlunsplit(("https", h, parsed.path, "", "")) for h in hosts]
+    return list(dict.fromkeys([*candidates, url]))
+
+
 def download(url, path, expected, algorithm="sha256"):
-    with open_download(url) as response, Path(path).open("wb") as f:
-        shutil.copyfileobj(response, f)
-    if digest(path, algorithm) != expected:
-        raise RuntimeError("Downloaded prerequisite checksum mismatch: " + str(path.name))
+    failures = []
+    for candidate in native_package_urls(url):
+        parsed = urlsplit(candidate)
+        label = urlunsplit((parsed.scheme, parsed.hostname or "", parsed.path, "", ""))
+        try:
+            with open_download(candidate, timeout=30) as response, Path(path).open("wb") as f:
+                shutil.copyfileobj(response, f)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            if isinstance(getattr(exc, "reason", None), ssl.SSLError):
+                raise
+            failures.append(label + ": " + str(exc))
+            Path(path).unlink(missing_ok=True)
+            continue
+        # An integrity or TLS-trust failure must never turn into a mirror retry.
+        if digest(path, algorithm) != expected:
+            raise RuntimeError("Downloaded prerequisite checksum mismatch: " + str(path.name))
+        return candidate
+    raise RuntimeError("Cannot download verified native prerequisite " + str(Path(path).name)
+                       + ". Attempted package URLs: " + "; ".join(failures))
 
 
 def supported():
@@ -90,7 +131,7 @@ def install_libraries(deps, allow_download=True):
         lib.mkdir(parents=True)
         for row in records:
             archive = stage / row["file"]
-            download(row["url"], archive, row["checksum"], row["algorithm"])
+            row["download_url"] = download(row["url"], archive, row["checksum"], row["algorithm"])
             if archive.stat().st_size != row["size"]:
                 raise RuntimeError("APT archive size mismatch")
             subprocess.run(["dpkg-deb", "-x", str(archive), str(unpacked)], check=True)
