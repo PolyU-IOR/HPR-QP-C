@@ -12,7 +12,10 @@ building it does not fetch NumPy, SciPy or other Python packages.
 
 The native MINRES recurrence in `polishing/native/linalg.cpp` is adapted from
 SciPy 1.16.2. Its BSD license is retained in `SCIPY_LICENSE.txt`; SciPy is not a
-runtime dependency. BLAS/LAPACK and OpenSSL libcrypto are system native libraries.
+runtime dependency. BLAS/LAPACK can use system libraries or the matching offline
+runtime under `deps/native/`; see its manifest, licenses and source provenance.
+OpenSSL libcrypto is a system native library. Plain make builds the worker and
+these vendored sources directly with the C/C++ compilers; CMake is optional.
 
 `NATIVE_SOURCES.json` records downloaded source URLs, versions and SHA-256
 identities. The corresponding licenses are retained in each source directory

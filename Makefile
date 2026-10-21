@@ -313,7 +313,7 @@ help:
 	  '  make test             Run CPU tests by default, or CPU+GPU tests when CUDA is available' \
 	  '  make install          Install CPU shared artifacts by default, or CPU+GPU shared artifacts when CUDA is available' \
 	  '  make setup-cudss      Download verified cuDSS locally for the selected CUDA toolkit (explicit setup)' \
-	  '  make setup-native     Install missing CMake/BLAS/LAPACK privately for native CPU polishing' \
+	  '  make setup-native     Prepare private BLAS/LAPACK for native CPU polishing (no CMake)' \
 	  '  make check-cudss      Verify default GPU Gram build dependency without running a solver' \
 	  '  make clean            Remove default build directories for the current machine' \
 	  '  make build            Build the CPU solver and tests only' \
@@ -372,7 +372,7 @@ help:
 	  '  CUDA_NVCC:         $(if $(CUDA_NVCC),$(CUDA_NVCC),<not found>)' \
 	  '  CUDA_ARCH:         $(CUDA_ARCH)' \
 	  '' \
-	  'The solver uses gcc/g++/nvcc; the native CPU polishing worker also requires CMake and BLAS/LAPACK.'
+	  'The solver and native CPU polishing worker use gcc/g++/nvcc and BLAS/LAPACK; CMake is optional.'
 
 _announce-auto-build:
 	@if [ -n "$(CUDA_NVCC)" ]; then \
@@ -746,15 +746,15 @@ $(BUILD_DIR)/test_polish_progress: tests/polishing/test_progress.cpp src/shared/
 .PHONY: test-polishing
 .PHONY: native-polishing setup-native
 setup-native:
-	$(Q)$(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" --auto-install 1
+	$(Q)CC="$(CC)" CXX="$(CXX)" AR="$(AR)" $(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" --auto-install 1
 
 native-polishing:
-	$(Q)$(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" \
+	$(Q)CC="$(CC)" CXX="$(CXX)" AR="$(AR)" $(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" \
 		--gpu-dir "$(GPU_BUILD_DIR)" --auto-install "$(AUTO_INSTALL_NATIVE_DEPS)" --build
 
 .PHONY: test-native-polishing
 test-native-polishing: native-polishing
-	$(Q)$(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" \
+	$(Q)CC="$(CC)" CXX="$(CXX)" AR="$(AR)" $(PYTHON) scripts/setup_native.py --build-dir "$(NATIVE_BUILD_DIR)" \
 		--auto-install "$(AUTO_INSTALL_NATIVE_DEPS)" --build --target hprqp_polish_inspect
 	$(Q)HPRQP_NATIVE_BUILD="$(NATIVE_BUILD_DIR)" PYTHONPATH="$(CURDIR)/polishing:$(PYTHONPATH)" $(PYTHON) tests/polishing/test_native.py
 
@@ -796,6 +796,7 @@ test-entrypoints: $(BUILD_DIR)/test_defaults $(BUILD_DIR)/test_polish_worker_pat
 	$(Q)$(PYTHON) tests/test_cudss_discovery.py
 	$(Q)$(PYTHON) tests/test_cudss_setup.py
 	$(Q)$(PYTHON) tests/test_native_setup.py
+	$(Q)$(PYTHON) tests/test_native_build.py
 	$(Q)$(PYTHON) tests/test_download_utils.py
 	$(Q)$(PYTHON) tests/test_gpu_runtime_link.py
 	$(Q)$(PYTHON) tests/test_cuda_runtime_config.py

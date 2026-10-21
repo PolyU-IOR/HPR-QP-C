@@ -10,15 +10,12 @@ import platform
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
-import zipfile
 from download_utils import open_download
+from build_native import discover_libraries, build as build_native
 
 ROOT = Path(__file__).resolve().parents[1]
-CMAKE_NAME = "cmake-3.28.4-py2.py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
-CMAKE_URL = ("https://files.pythonhosted.org/packages/2f/a1/"
-             "aed90f63609db7af7bbd9a6ad8bcc28b710ed58db3ebf0e7c92ce1d04f26/" + CMAKE_NAME)
-CMAKE_SHA256 = "bc06b483cb2bcaf78184e66ac7fd0f3bbe4ed9a690369b1e4897b19568d566dd"
 
 
 def digest(path, algorithm="sha256"):
@@ -39,63 +36,7 @@ def download(url, path, expected, algorithm="sha256"):
 def supported():
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         raise RuntimeError("Automatic native dependency setup currently supports Linux x86_64. "
-                           "Install CMake >=3.16 and BLAS/LAPACK using your platform's package manager.")
-
-
-def extract_wheel(path, destination):
-    root = Path(destination).resolve()
-    with zipfile.ZipFile(path) as z:
-        for info in z.infolist():
-            name = Path(info.filename)
-            if (name.is_absolute() or ".." in name.parts
-                    or (info.external_attr >> 16) & 0o170000 == 0o120000):
-                raise ValueError("Unsafe CMake wheel member")
-            target = (root / name).resolve()
-            if target != root and root not in target.parents:
-                raise ValueError("Escaping CMake wheel member")
-        z.extractall(root)
-    for name in ("cmake", "ctest", "cpack"):
-        p = root / "cmake/data/bin" / name
-        if not p.is_file():
-            raise RuntimeError("Incomplete CMake archive")
-        p.chmod(0o755)
-
-
-def usable_cmake(path):
-    try:
-        text = subprocess.check_output([str(path), "--version"], text=True,
-                                       stderr=subprocess.STDOUT)
-        m = re.search(r"cmake version (\d+)\.(\d+)", text)
-        return bool(m and tuple(map(int, m.groups())) >= (3, 16))
-    except (OSError, subprocess.CalledProcessError):
-        return False
-
-
-def ensure_cmake(deps, allow_download):
-    system = shutil.which("cmake")
-    if system and usable_cmake(system):
-        return Path(system)
-    installed = deps / "cmake/cmake/data/bin/cmake"
-    if usable_cmake(installed):
-        return installed
-    if not allow_download:
-        raise RuntimeError("CMake >=3.16 is missing and AUTO_INSTALL_NATIVE_DEPS=0. "
-                           "Install CMake or run make setup-native.")
-    supported()
-    if (deps / "cmake").exists():
-        raise RuntimeError("Incomplete .deps/cmake exists; inspect it before retrying.")
-    print("Installing verified CMake 3.28.4 locally under .deps/cmake.", flush=True)
-    with tempfile.TemporaryDirectory(prefix=".cmake-", dir=deps) as tmp:
-        stage = Path(tmp)
-        archive = stage / CMAKE_NAME
-        download(CMAKE_URL, archive, CMAKE_SHA256)
-        extract_wheel(archive, stage / "package")
-        if not usable_cmake(stage / "package/cmake/data/bin/cmake"):
-            raise RuntimeError("Downloaded CMake cannot run on this host")
-        (stage / "package/HPRQP_INSTALL.json").write_text(json.dumps({
-            "url": CMAKE_URL, "sha256": CMAKE_SHA256, "version": "3.28.4"}, indent=2) + "\n")
-        os.rename(stage / "package", deps / "cmake")
-    return installed
+                           "Install BLAS/LAPACK using your platform's package manager.")
 
 
 def package_records(text):
@@ -117,15 +58,109 @@ def package_records(text):
     return rows
 
 
-def install_libraries(deps):
+def host_distribution():
+    """Do not apply a distribution-specific binary bundle to arbitrary Linux."""
+    try:
+        values = {}
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                values[key] = value.strip().strip('"').strip("'")
+        return values
+    except OSError:
+        return {}
+
+
+def install_bundled_libraries(deps):
+    bundle = ROOT / "deps/native"
+    manifest_path = bundle / "manifest.json"
+    if not manifest_path.is_file():
+        return False
+    manifest = json.loads(manifest_path.read_text())
+    host = host_distribution()
+    expected = manifest.get("platform", {})
+    actual = dict(system=platform.system(), machine=platform.machine(),
+                  os_id=host.get("ID"), version_id=host.get("VERSION_ID"))
+    if actual != expected:
+        return False
+    if manifest.get("format") != 1:
+        raise RuntimeError("Unsupported bundled native manifest format")
+    name = manifest.get("archive", "")
+    if not name or Path(name).name != name:
+        raise RuntimeError("Invalid bundled native archive filename")
+    archive = bundle / name
+    if (not archive.is_file() or archive.stat().st_size != manifest.get("size")
+            or digest(archive) != manifest.get("sha256")):
+        raise RuntimeError("Bundled native archive checksum/size mismatch; restore deps/native")
+    files = manifest.get("files", {})
+    required = ("libblas.so.3", "liblapack.so.3", "libgfortran.so.5",
+                "libquadmath.so.0", "libgcc_s.so.1")
+    if (not all("lib/" + n in files for n in required)
+            or not all("licenses/" + n + "/copyright" in files
+                       for n in ("libblas3", "liblapack3", "libgfortran5",
+                                 "libquadmath0", "libgcc-s1"))
+            or "SOURCES.md" not in files or "ORIGIN_INSTALL.json" not in files):
+        raise RuntimeError("Incomplete bundled native libraries, licenses or provenance")
+    destination = deps / "native"
+    if destination.exists():
+        raise RuntimeError("Local native dependencies already exist but configuration failed. "
+                           "Inspect .deps/native; nothing overwritten.")
+    print("Installing bundled BLAS/LAPACK and runtime libraries under .deps/native "
+          "(offline; no CMake, APT or system-package changes).", flush=True)
+    with tempfile.TemporaryDirectory(prefix=".native-", dir=deps) as tmp:
+        package = Path(tmp) / "package"
+        package.mkdir()
+        seen = set()
+        total = 0
+        try:
+            with tarfile.open(archive, "r:xz") as tf:
+                for member in tf:
+                    path = Path(member.name)
+                    if (path.is_absolute() or ".." in path.parts
+                            or path.as_posix() != member.name or not member.isfile()
+                            or member.name not in files or member.name in seen):
+                        raise RuntimeError("Unsafe or unmanifested bundled native archive member")
+                    info = files[member.name]
+                    total += member.size
+                    if member.size != info["size"] or total > manifest["unpacked_bytes"]:
+                        raise RuntimeError("Bundled native file size mismatch")
+                    target = package / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with tf.extractfile(member) as src, target.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    if digest(target) != info["sha256"]:
+                        raise RuntimeError("Bundled native file checksum mismatch: " + member.name)
+                    seen.add(member.name)
+        except tarfile.TarError as exc:
+            raise RuntimeError("Invalid bundled native archive") from exc
+        if seen != set(files) or total != manifest["unpacked_bytes"]:
+            raise RuntimeError("Incomplete bundled native archive")
+        libraries = {n: digest(package / "lib" / n) for n in required}
+        if libraries != manifest.get("libraries"):
+            raise RuntimeError("Bundled native library identity mismatch")
+        (package / "HPRQP_INSTALL.json").write_text(json.dumps({
+            "origin": "bundled", "platform": actual, "archive_sha256": manifest["sha256"],
+            "packages": manifest["packages"], "libraries": libraries,
+            "scope": "private unmodified runtime; no maintainer scripts; bundled notices/sources",
+        }, indent=2) + "\n")
+        os.rename(package, destination)
+    return True
+
+
+def install_libraries(deps, allow_download=True):
     supported()
+    if install_bundled_libraries(deps):
+        return
+    if not allow_download:
+        raise RuntimeError("BLAS/LAPACK are missing, no matching bundled runtime is available, "
+                           "and AUTO_INSTALL_NATIVE_DEPS=0. Install native libraries for this platform.")
     if not shutil.which("apt-get") or not shutil.which("dpkg-deb"):
         raise RuntimeError("Automatic BLAS/LAPACK setup requires Debian/Ubuntu apt-get "
                            "and dpkg-deb. Install BLAS/LAPACK manually on this platform.")
     destination = deps / "native"
     if destination.exists():
         raise RuntimeError("Local native dependencies already exist but configuration failed. "
-                           "Inspect .deps/native and the saved CMake log; nothing overwritten.")
+                           "Inspect .deps/native and the native library probe; nothing overwritten.")
     # Repository metadata chooses native-architecture packages compatible with
     # the installed distribution. Never execute package maintainer scripts or
     # privately replace libc, libstdc++, the GPU driver, or system packages.
@@ -181,31 +216,19 @@ def install_libraries(deps):
         os.rename(package, destination)
 
 
-def configure(cmake, build, native):
-    command = [str(cmake), "-S", str(ROOT / "polishing/native"), "-B", str(build),
-               "-DCMAKE_BUILD_TYPE=Release", "-DHPRQP_NATIVE_ROOT=" + str(native)]
-    result = subprocess.run(command, capture_output=True, text=True)
-    return result, result.stdout + result.stderr
-
-
 def setup(build, allow_download):
     deps = ROOT / ".deps"
     deps.mkdir(exist_ok=True)
     with (deps / "native-setup.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        cmake = ensure_cmake(deps, allow_download)
-        result, output = configure(cmake, build, deps / "native")
-        if result.returncode and "HPRQP_NATIVE_BLAS_LAPACK_MISSING" in output:
-            (deps / "native_initial_configure.log").write_text(output)
-            if not allow_download:
-                raise RuntimeError("BLAS/LAPACK are missing and AUTO_INSTALL_NATIVE_DEPS=0. "
-                                   "Install libblas-dev/liblapack-dev or run make setup-native.")
-            install_libraries(deps)
-            result, output = configure(cmake, build, deps / "native")
-        print(output, end="", flush=True)
-        if result.returncode:
-            raise RuntimeError("Native polishing CMake configuration failed")
-        return cmake
+        libraries = discover_libraries(deps / "native")
+        if libraries is None:
+            install_libraries(deps, allow_download=allow_download)
+            libraries = discover_libraries(deps / "native")
+            if libraries is None:
+                raise RuntimeError("Installed BLAS/LAPACK cannot link or start on this host; "
+                                   "inspect .deps/native before retrying")
+        return libraries
 
 
 def main():
@@ -218,16 +241,9 @@ def main():
                         default="hprqp_polish_worker")
     args = parser.parse_args()
     build = Path(args.build_dir).resolve()
-    cmake = setup(build, args.auto_install == "1")
+    libraries = setup(build, args.auto_install == "1")
     if args.build:
-        subprocess.run([str(cmake), "--build", str(build), "--target",
-                        args.target, "--parallel", "2"], check=True)
-        if args.gpu_dir:
-            gpu = Path(args.gpu_dir)
-            gpu.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(build / "hprqp_polish_worker", gpu / "hprqp_polish_worker")
-            if (build / "lib").is_dir():
-                shutil.copytree(build / "lib", gpu / "lib", dirs_exist_ok=True)
+        build_native(build, libraries, target=args.target, gpu_dir=args.gpu_dir)
 
 
 if __name__ == "__main__":

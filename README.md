@@ -58,22 +58,29 @@ python3 scripts/run_dataset.py /path/to/mps /path/to/results
 For a fresh setup, provide a C/C++ compiler, Python 3 and OpenSSL `libcrypto`
 (3 or 1.1). Python is used by build helpers and the optional dataset script,
 not by polishing. On Debian/Ubuntu Linux x86_64, `make` also installs missing
-CMake and BLAS/LAPACK prerequisites into this checkout automatically.
+BLAS/LAPACK prerequisites into this checkout automatically. The default
+`make` build uses the C/C++ compilers directly and does not require CMake.
 With a compatible CUDA toolkit and driver installed:
 
 ```sh
 make
 ```
 
-For native CPU polishing, `make` first reuses working CMake and BLAS/LAPACK
-installations. If missing, it downloads checksum-verified CMake 3.28.4 and/or
-extracts the distribution's BLAS/LAPACK and Fortran runtime packages under
-`.deps/`. Package versions and hashes come from the configured APT repository
-metadata. This requires `apt-get`/`dpkg-deb` with usable package indexes for the
-native libraries. It does not run `sudo`, execute package installation scripts,
-or modify system packages. `make setup-native` can prepare this explicitly.
-`AUTO_INSTALL_NATIVE_DEPS=0` disables these downloads and reports missing
-dependencies. On other platforms, install CMake 3.16+ and BLAS/LAPACK manually.
+For native CPU polishing, `make` first reuses working BLAS/LAPACK libraries.
+On Ubuntu 22.04 x86_64, missing libraries and their Fortran/GCC runtimes are
+included in `deps/native/` and installed privately under `.deps/native/` after
+checksum checks. This step works offline and does not require APT. The compact
+bundle retains original licenses, runtime exceptions and source/package provenance.
+
+On other Debian/Ubuntu Linux x86_64 hosts, missing libraries are still downloaded
+from the distribution's APT metadata with verified hashes. That fallback requires
+`apt-get`/`dpkg-deb`, usable package indexes and network access. Neither path runs
+`sudo`, package installation scripts or changes system packages.
+`make setup-native` prepares missing native libraries explicitly.
+`AUTO_INSTALL_NATIVE_DEPS=0` disables native dependency downloads; matching
+bundled libraries can still be installed offline. Other platforms must provide
+compatible BLAS/LAPACK libraries themselves. CMake remains an optional alternative
+build system; plain `make` does not invoke or install it.
 
 The native worker finds its private runtime libraries automatically; no
 `LD_LIBRARY_PATH` setting is needed for these libraries. If you previously saw

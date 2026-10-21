@@ -1,0 +1,231 @@
+{
+  "format": 1,
+  "platform": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "os_id": "ubuntu",
+    "version_id": "22.04"
+  },
+  "archive": "ubuntu22.04-x86_64.tar.xz",
+  "sha256": "d2f91c050dae809976aea9911182270650693414d42f1019f19310afed81548f",
+  "size": 3729256,
+  "unpacked_bytes": 12981035,
+  "files": {
+    "ORIGIN_INSTALL.json": {
+      "sha256": "8ff90915d9038a054e8a041c60bef92d5d4ef12a623614096b48d2e5ea1ee18d",
+      "size": 3274
+    },
+    "SOURCES.md": {
+      "sha256": "d5888363d3a1f2c4d79509b39b082a77158e61358d5a454f6c80480c8dc297f8",
+      "size": 1368
+    },
+    "lib/libblas.so.3": {
+      "sha256": "bd8a282c845e100cbb28dd31f9cf19757d508bf7a07a7f62bbe8c04cafb81646",
+      "size": 673632
+    },
+    "lib/libgcc_s.so.1": {
+      "sha256": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a",
+      "size": 125488
+    },
+    "lib/libgfortran.so.5": {
+      "sha256": "f7379c9331de9d66c03b439a070e8056b7419fc4213320d647952b998d026b30",
+      "size": 2989432
+    },
+    "lib/liblapack.so.3": {
+      "sha256": "86b2c20720e2aafb6b84d20d252cd39c5b22a6f7452f8bb920a06d8c8439124c",
+      "size": 7567224
+    },
+    "lib/libquadmath.so.0": {
+      "sha256": "a962d0383ce4c2a39a81017ffd9e5b51f32fd314e411c09ddd6da21593079a8c",
+      "size": 289592
+    },
+    "licenses/common-licenses/Apache-2.0": {
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "size": 11358
+    },
+    "licenses/common-licenses/Artistic": {
+      "sha256": "b7fd9b73ea99602016a326e0b62e6646060d18febdd065ceca8bb482208c3d88",
+      "size": 6111
+    },
+    "licenses/common-licenses/BSD": {
+      "sha256": "5d588eb3b157d52112afea935c88a7ff9efddc1e2d95a42c25d3b96ad9055008",
+      "size": 1499
+    },
+    "licenses/common-licenses/CC0-1.0": {
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+      "size": 7048
+    },
+    "licenses/common-licenses/GFDL-1.2": {
+      "sha256": "56976e64523fa1e68db4e6f464f5b2cb89d7d08f54b1d012e317b8db286b3faf",
+      "size": 20431
+    },
+    "licenses/common-licenses/GFDL-1.3": {
+      "sha256": "4748f03ed2dbcc14cde6ebc30799899c403e356a7465dc30fcf2b80c45fc0059",
+      "size": 22962
+    },
+    "licenses/common-licenses/GPL-1": {
+      "sha256": "d77d235e41d54594865151f4751e835c5a82322b0e87ace266567c3391a4b912",
+      "size": 12632
+    },
+    "licenses/common-licenses/GPL-2": {
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "size": 18092
+    },
+    "licenses/common-licenses/GPL-3": {
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "size": 35147
+    },
+    "licenses/common-licenses/LGPL-2": {
+      "sha256": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+      "size": 25383
+    },
+    "licenses/common-licenses/LGPL-2.1": {
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "size": 26530
+    },
+    "licenses/common-licenses/LGPL-3": {
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "size": 7651
+    },
+    "licenses/common-licenses/MPL-1.1": {
+      "sha256": "f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469",
+      "size": 25755
+    },
+    "licenses/common-licenses/MPL-2.0": {
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+      "size": 16726
+    },
+    "licenses/gcc-12-base/README.Debian.amd64.gz": {
+      "sha256": "38de523c62ebd99e54470d3bebc9d325ad72f1bde4b7aaeb5daf1229cc0c4dd3",
+      "size": 3338
+    },
+    "licenses/gcc-12-base/TODO.Debian": {
+      "sha256": "aba726eeeafd7ae426552559759c83ee93249d0d9c4e3e19f146fde6d2cde448",
+      "size": 2212
+    },
+    "licenses/gcc-12-base/changelog.Debian.gz": {
+      "sha256": "3b16a8c54a16e77333f55862e5bd4386dbeaaafee6d87331819556cc1f67ef23",
+      "size": 196180
+    },
+    "licenses/gcc-12-base/copyright": {
+      "sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "size": 68194
+    },
+    "licenses/libblas3/changelog.Debian.gz": {
+      "sha256": "e5325ff12ecff064f9cd371218db0e04650221f65907bd40a0a42301cd5aca9d",
+      "size": 2096
+    },
+    "licenses/libblas3/copyright": {
+      "sha256": "cea124797a83f772af14449ea95a28bb192d2bc4861b8af347101a3592476089",
+      "size": 4906
+    },
+    "licenses/libgcc-s1/README.Debian.amd64.gz": {
+      "sha256": "38de523c62ebd99e54470d3bebc9d325ad72f1bde4b7aaeb5daf1229cc0c4dd3",
+      "size": 3338
+    },
+    "licenses/libgcc-s1/TODO.Debian": {
+      "sha256": "aba726eeeafd7ae426552559759c83ee93249d0d9c4e3e19f146fde6d2cde448",
+      "size": 2212
+    },
+    "licenses/libgcc-s1/changelog.Debian.gz": {
+      "sha256": "3b16a8c54a16e77333f55862e5bd4386dbeaaafee6d87331819556cc1f67ef23",
+      "size": 196180
+    },
+    "licenses/libgcc-s1/copyright": {
+      "sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "size": 68194
+    },
+    "licenses/libgfortran5/README.Debian.amd64.gz": {
+      "sha256": "38de523c62ebd99e54470d3bebc9d325ad72f1bde4b7aaeb5daf1229cc0c4dd3",
+      "size": 3338
+    },
+    "licenses/libgfortran5/TODO.Debian": {
+      "sha256": "aba726eeeafd7ae426552559759c83ee93249d0d9c4e3e19f146fde6d2cde448",
+      "size": 2212
+    },
+    "licenses/libgfortran5/changelog.Debian.gz": {
+      "sha256": "3b16a8c54a16e77333f55862e5bd4386dbeaaafee6d87331819556cc1f67ef23",
+      "size": 196180
+    },
+    "licenses/libgfortran5/copyright": {
+      "sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "size": 68194
+    },
+    "licenses/liblapack3/changelog.Debian.gz": {
+      "sha256": "e5325ff12ecff064f9cd371218db0e04650221f65907bd40a0a42301cd5aca9d",
+      "size": 2096
+    },
+    "licenses/liblapack3/copyright": {
+      "sha256": "cea124797a83f772af14449ea95a28bb192d2bc4861b8af347101a3592476089",
+      "size": 4906
+    },
+    "licenses/libquadmath0/README.Debian.amd64.gz": {
+      "sha256": "38de523c62ebd99e54470d3bebc9d325ad72f1bde4b7aaeb5daf1229cc0c4dd3",
+      "size": 3338
+    },
+    "licenses/libquadmath0/TODO.Debian": {
+      "sha256": "aba726eeeafd7ae426552559759c83ee93249d0d9c4e3e19f146fde6d2cde448",
+      "size": 2212
+    },
+    "licenses/libquadmath0/changelog.Debian.gz": {
+      "sha256": "3b16a8c54a16e77333f55862e5bd4386dbeaaafee6d87331819556cc1f67ef23",
+      "size": 196180
+    },
+    "licenses/libquadmath0/copyright": {
+      "sha256": "da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3",
+      "size": 68194
+    }
+  },
+  "libraries": {
+    "libblas.so.3": "bd8a282c845e100cbb28dd31f9cf19757d508bf7a07a7f62bbe8c04cafb81646",
+    "liblapack.so.3": "86b2c20720e2aafb6b84d20d252cd39c5b22a6f7452f8bb920a06d8c8439124c",
+    "libgfortran.so.5": "f7379c9331de9d66c03b439a070e8056b7419fc4213320d647952b998d026b30",
+    "libquadmath.so.0": "a962d0383ce4c2a39a81017ffd9e5b51f32fd314e411c09ddd6da21593079a8c",
+    "libgcc_s.so.1": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a"
+  },
+  "packages": [
+    {
+      "url": "http://hk.archive.ubuntu.com/ubuntu/pool/main/l/lapack/libblas3_3.10.0-2ubuntu1_amd64.deb",
+      "file": "libblas3_3.10.0-2ubuntu1_amd64.deb",
+      "size": 228490,
+      "algorithm": "sha512",
+      "checksum": "5074f91b87d288eb14d9ed240e72eca775f9b5ae029afa47894bfa552ff1004c591da9adf70c66265474d25e0719968fa9c2d6e79830ee1f704c62eb15baef27"
+    },
+    {
+      "url": "http://hk.archive.ubuntu.com/ubuntu/pool/main/l/lapack/liblapack3_3.10.0-2ubuntu1_amd64.deb",
+      "file": "liblapack3_3.10.0-2ubuntu1_amd64.deb",
+      "size": 2504470,
+      "algorithm": "sha512",
+      "checksum": "3dfca8bde0d0c8de417dd6a20a7313c53eb875e57fce6ccb5c7d578f0a44470cf647686339adc0bbe1616b1c9fcaca3634d85c3a7665feb6d6bba7a39016a6f2"
+    },
+    {
+      "url": "http://hk.archive.ubuntu.com/ubuntu/pool/main/g/gcc-12/gcc-12-base_12.3.0-1ubuntu1%7e22.04.3_amd64.deb",
+      "file": "gcc-12-base_12.3.0-1ubuntu1~22.04.3_amd64.deb",
+      "size": 215782,
+      "algorithm": "sha512",
+      "checksum": "348f44b02c02be28c9f39a670e042e41d8bc6e211d900270f2c4ffcf99480e15e87d81e34c0d77744917945bc07d32bafc3522d56e6ef7114efdbce3f909d43a"
+    },
+    {
+      "url": "http://hk.archive.ubuntu.com/ubuntu/pool/main/g/gcc-12/libgcc-s1_12.3.0-1ubuntu1%7e22.04.3_amd64.deb",
+      "file": "libgcc-s1_12.3.0-1ubuntu1~22.04.3_amd64.deb",
+      "size": 53896,
+      "algorithm": "sha512",
+      "checksum": "d7e90d03c46012f6cb8af12ad2717a2e8aa55ed8964895d944b5636ad2cb9d6f49070c3cbd3d4be61b44fd338cac5b7ef0c0e0e84d391052a84bedc9a49290dc"
+    },
+    {
+      "url": "http://hk.archive.ubuntu.com/ubuntu/pool/main/g/gcc-12/libgfortran5_12.3.0-1ubuntu1%7e22.04.3_amd64.deb",
+      "file": "libgfortran5_12.3.0-1ubuntu1~22.04.3_amd64.deb",
+      "size": 878662,
+      "algorithm": "sha512",
+      "checksum": "b30676ccd686791df410d41e912002414e577ec03fb414558d572653d0a4a67756d131d8fc0345f7127f9e39f984c80364b7c3e2999aa4ccbd47e1eec7eafe73"
+    },
+    {
+      "url": "http://hk.archive.ubuntu.com/ubuntu/pool/main/g/gcc-12/libquadmath0_12.3.0-1ubuntu1%7e22.04.3_amd64.deb",
+      "file": "libquadmath0_12.3.0-1ubuntu1~22.04.3_amd64.deb",
+      "size": 153976,
+      "algorithm": "sha512",
+      "checksum": "4ebc88f62eb20c28b93af4e051d3fe35a42f3f244293b0dbbf90ca8bf01bf12e933c00f1333f69509b107dfd2b9e7281f886336cc54d29bbe8f4506dcb4dc9df"
+    }
+  ],
+  "source": "Unmodified matching S817 qualified Ubuntu packages; see SOURCES.md in payload."
+}
